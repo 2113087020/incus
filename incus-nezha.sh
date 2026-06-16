@@ -33,15 +33,18 @@ do_scan() {
         COUNT=$((COUNT + 1))
         printf "\r[%d/%d] 正在检查: %-30s" "$COUNT" "$TOTAL" "$container"
 
-        # 单次 exec，命中任一条件立刻 exit 0 短路，不多跑
+        # 单次 exec，命中立刻短路；跳过自身 PID 避免误匹配脚本自己
         HIT=$(incus exec "$container" -- sh -c '
+            SELF=$$
             for f in /proc/[0-9]*/cmdline; do
                 [ -f "$f" ] || continue
-                if xargs -0 < "$f" 2>/dev/null | grep -qiE "nezha"; then
+                p="${f%/cmdline}"; p="${p#/proc/}"
+                [ "$p" = "$SELF" ] && continue
+                if xargs -0 < "$f" 2>/dev/null | grep -qiE "nezha[-_]?agent"; then
                     echo HIT; exit 0
                 fi
             done
-            for p in /opt/nezha /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
+            for p in /opt/nezha/agent/nezha-agent /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
                 [ -e "$p" ] && echo HIT && exit 0
             done
         ' </dev/null 2>/dev/null)
