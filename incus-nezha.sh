@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # incus 容器哪吒探针检测脚本
-# 检测所有运行中的 incus 容器是否存在 nezha-agent 进程
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,16 +8,15 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-NEZHA_PATTERNS="nezha-agent|nezha_agent|nezha-dashboard|nezha_dashboard"
-
 declare -a INFECTED_CONTAINERS=()
+declare -a INFECTED_DETAILS=()
 
 echo -e "${CYAN}=======================================${NC}"
 echo -e "${CYAN}  Incus 容器哪吒探针检测工具${NC}"
 echo -e "${CYAN}=======================================${NC}"
 echo ""
 
-RUNNING_CONTAINERS=$(incus list status=running -f csv -c n 2>/dev/null)
+RUNNING_CONTAINERS=$(incus list -f csv -c ns | grep -i ',RUNNING$' | cut -d',' -f1)
 
 if [ -z "$RUNNING_CONTAINERS" ]; then
     echo -e "${GREEN}没有正在运行的容器。${NC}"
@@ -30,17 +28,79 @@ echo -e "正在扫描 ${YELLOW}${TOTAL}${NC} 个运行中的容器...\n"
 
 COUNT=0
 while IFS= read -r container; do
+    [ -z "$container" ] && continue
     COUNT=$((COUNT + 1))
     printf "\r[%d/%d] 正在检查: %-30s" "$COUNT" "$TOTAL" "$container"
 
-    RESULT=$(incus exec "$container" -- sh -c "ps aux 2>/dev/null || ps -ef 2>/dev/null" 2>/dev/null | grep -iE "$NEZHA_PATTERNS" | grep -v grep)
+    DETAIL=""
 
-    if [ -n "$RESULT" ]; then
+    # 方法1: 通过 /proc 读取进程 cmdline（不依赖 ps，Alpine/Debian 通用）
+    # 用 xargs -0 替代 tr "\0"，BusyBox 兼容性更好
+    PROC_RESULT=$(incus exec "$container" -- sh -c '
+        for f in /proc/[0-9]*/cmdline; do
+            [ -f "$f" ] || continue
+            cmd=$(xargs -0 < "$f" 2>/dev/null || cat "$f" 2>/dev/null)
+            [ -n "$cmd" ] && echo "$cmd"
+        done
+    ' 2>/dev/null | grep -iE 'nezha[-_]?agent|nezha[-_]?dashboard|/opt/nezha|/usr/local/bin/nezha')
+
+    if [ -n "$PROC_RESULT" ]; then
+        DETAIL="${DETAIL}[进程] ${PROC_RESULT}"$'\n'
+    fi
+
+    # 方法2: 检查哪吒探针常见安装路径
+    FILE_RESULT=$(incus exec "$container" -- sh -c '
+        for p in \
+            /opt/nezha \
+            /opt/nezha/agent \
+            /opt/nezha/agent/nezha-agent \
+            /usr/local/bin/nezha-agent \
+            /usr/local/bin/nezha_agent \
+            /root/nezha-agent \
+            /root/nezha_agent; do
+            [ -e "$p" ] && echo "$p"
+        done
+    ' 2>/dev/null)
+
+    if [ -n "$FILE_RESULT" ]; then
+        DETAIL="${DETAIL}[文件] ${FILE_RESULT}"$'\n'
+    fi
+
+    # 方法3: 检查服务 — 同时支持 systemd (Debian) 和 OpenRC (Alpine)
+    SVC_RESULT=$(incus exec "$container" -- sh -c '
+        # systemd (Debian/Ubuntu)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl list-unit-files 2>/dev/null | grep -i nezha
+            for f in /etc/systemd/system/nezha-agent.service \
+                     /etc/systemd/system/nezha-agent.service.d; do
+                [ -e "$f" ] && echo "systemd: $f"
+            done
+        fi
+        # OpenRC (Alpine)
+        if command -v rc-service >/dev/null 2>&1; then
+            rc-service -l 2>/dev/null | grep -i nezha
+            for f in /etc/init.d/nezha-agent /etc/init.d/nezha_agent; do
+                [ -e "$f" ] && echo "openrc: $f"
+            done
+        fi
+        # crontab（通用，有些人用 cron 拉起哪吒）
+        crontab -l 2>/dev/null | grep -i nezha
+        for u in /var/spool/cron/crontabs/*; do
+            [ -f "$u" ] && grep -i nezha "$u" 2>/dev/null && echo "cron: $u"
+        done
+    ' 2>/dev/null)
+
+    if [ -n "$SVC_RESULT" ]; then
+        DETAIL="${DETAIL}[服务] ${SVC_RESULT}"$'\n'
+    fi
+
+    if [ -n "$DETAIL" ]; then
         INFECTED_CONTAINERS+=("$container")
+        INFECTED_DETAILS+=("$DETAIL")
         echo ""
         echo -e "  ${RED}[!] 发现哪吒探针: ${container}${NC}"
-        echo "$RESULT" | while IFS= read -r line; do
-            echo -e "      ${YELLOW}${line}${NC}"
+        echo "$DETAIL" | while IFS= read -r line; do
+            [ -n "$line" ] && echo -e "      ${YELLOW}${line}${NC}"
         done
     fi
 done <<< "$RUNNING_CONTAINERS"
@@ -60,6 +120,9 @@ fi
 echo -e "${RED}检测到 ${#INFECTED_CONTAINERS[@]} 个容器存在哪吒探针:${NC}\n"
 for i in "${!INFECTED_CONTAINERS[@]}"; do
     echo -e "  ${YELLOW}[$((i+1))]${NC} ${INFECTED_CONTAINERS[$i]}"
+    echo "${INFECTED_DETAILS[$i]}" | while IFS= read -r line; do
+        [ -n "$line" ] && echo -e "       ${line}"
+    done
 done
 echo ""
 
