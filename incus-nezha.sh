@@ -9,11 +9,9 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 declare -a INFECTED_CONTAINERS=()
-declare -a INFECTED_DETAILS=()
 
 do_scan() {
     INFECTED_CONTAINERS=()
-    INFECTED_DETAILS=()
 
     echo -e "\n${CYAN}=======================================${NC}"
     echo -e "${CYAN}  Incus 容器哪吒探针检测工具${NC}"
@@ -35,73 +33,27 @@ do_scan() {
         COUNT=$((COUNT + 1))
         printf "\r[%d/%d] 正在检查: %-30s" "$COUNT" "$TOTAL" "$container"
 
-        DETAIL=""
-
-        PROC_RESULT=$(incus exec "$container" -- sh -c '
+        # 单次 exec，命中任一条件立刻 exit 0 短路，不多跑
+        HIT=$(incus exec "$container" -- sh -c '
             for f in /proc/[0-9]*/cmdline; do
                 [ -f "$f" ] || continue
-                cmd=$(xargs -0 < "$f" 2>/dev/null || cat "$f" 2>/dev/null)
-                [ -n "$cmd" ] && echo "$cmd"
+                if xargs -0 < "$f" 2>/dev/null | grep -qiE "nezha"; then
+                    echo HIT; exit 0
+                fi
             done
-        ' </dev/null 2>/dev/null | grep -iE 'nezha[-_]?agent|nezha[-_]?dashboard|/opt/nezha|/usr/local/bin/nezha')
-
-        if [ -n "$PROC_RESULT" ]; then
-            DETAIL="${DETAIL}[进程] ${PROC_RESULT}"$'\n'
-        fi
-
-        FILE_RESULT=$(incus exec "$container" -- sh -c '
-            for p in \
-                /opt/nezha \
-                /opt/nezha/agent \
-                /opt/nezha/agent/nezha-agent \
-                /usr/local/bin/nezha-agent \
-                /usr/local/bin/nezha_agent \
-                /root/nezha-agent \
-                /root/nezha_agent; do
-                [ -e "$p" ] && echo "$p"
+            for p in /opt/nezha /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
+                [ -e "$p" ] && echo HIT && exit 0
             done
         ' </dev/null 2>/dev/null)
 
-        if [ -n "$FILE_RESULT" ]; then
-            DETAIL="${DETAIL}[文件] ${FILE_RESULT}"$'\n'
-        fi
-
-        SVC_RESULT=$(incus exec "$container" -- sh -c '
-            if command -v systemctl >/dev/null 2>&1; then
-                systemctl list-unit-files 2>/dev/null | grep -i nezha
-                for f in /etc/systemd/system/nezha-agent.service \
-                         /etc/systemd/system/nezha-agent.service.d; do
-                    [ -e "$f" ] && echo "systemd: $f"
-                done
-            fi
-            if command -v rc-service >/dev/null 2>&1; then
-                rc-service -l 2>/dev/null | grep -i nezha
-                for f in /etc/init.d/nezha-agent /etc/init.d/nezha_agent; do
-                    [ -e "$f" ] && echo "openrc: $f"
-                done
-            fi
-            crontab -l 2>/dev/null | grep -i nezha
-            for u in /var/spool/cron/crontabs/*; do
-                [ -f "$u" ] && grep -i nezha "$u" 2>/dev/null && echo "cron: $u"
-            done
-        ' </dev/null 2>/dev/null)
-
-        if [ -n "$SVC_RESULT" ]; then
-            DETAIL="${DETAIL}[服务] ${SVC_RESULT}"$'\n'
-        fi
-
-        if [ -n "$DETAIL" ]; then
+        if [ "$HIT" = "HIT" ]; then
             INFECTED_CONTAINERS+=("$container")
-            INFECTED_DETAILS+=("$DETAIL")
-            echo ""
-            echo -e "  ${RED}[!] 发现哪吒探针: ${container}${NC}"
-            echo "$DETAIL" | while IFS= read -r line; do
-                [ -n "$line" ] && echo -e "      ${YELLOW}${line}${NC}"
-            done
+            printf "\r${RED}[!] %-40s${NC}\n" "$container"
         fi
     done 3<<< "$RUNNING_CONTAINERS"
 
-    echo -e "\n\n${CYAN}=======================================${NC}"
+    printf "\r%-60s\n" ""
+    echo -e "${CYAN}=======================================${NC}"
     echo -e "${CYAN}  扫描完成${NC}"
     echo -e "${CYAN}=======================================${NC}\n"
 
@@ -113,9 +65,6 @@ do_scan() {
     echo -e "${RED}检测到 ${#INFECTED_CONTAINERS[@]} 个容器存在哪吒探针:${NC}\n"
     for i in "${!INFECTED_CONTAINERS[@]}"; do
         echo -e "  ${YELLOW}[$((i+1))]${NC} ${INFECTED_CONTAINERS[$i]}"
-        echo "${INFECTED_DETAILS[$i]}" | while IFS= read -r line; do
-            [ -n "$line" ] && echo -e "       ${line}"
-        done
     done
     echo ""
     return 0
