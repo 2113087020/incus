@@ -27,7 +27,7 @@ TOTAL=$(echo "$RUNNING_CONTAINERS" | wc -l | tr -d ' ')
 echo -e "正在扫描 ${YELLOW}${TOTAL}${NC} 个运行中的容器...\n"
 
 COUNT=0
-while IFS= read -r container; do
+while IFS= read -r container <&3; do
     [ -z "$container" ] && continue
     COUNT=$((COUNT + 1))
     printf "\r[%d/%d] 正在检查: %-30s" "$COUNT" "$TOTAL" "$container"
@@ -35,14 +35,13 @@ while IFS= read -r container; do
     DETAIL=""
 
     # 方法1: 通过 /proc 读取进程 cmdline（不依赖 ps，Alpine/Debian 通用）
-    # 用 xargs -0 替代 tr "\0"，BusyBox 兼容性更好
     PROC_RESULT=$(incus exec "$container" -- sh -c '
         for f in /proc/[0-9]*/cmdline; do
             [ -f "$f" ] || continue
             cmd=$(xargs -0 < "$f" 2>/dev/null || cat "$f" 2>/dev/null)
             [ -n "$cmd" ] && echo "$cmd"
         done
-    ' 2>/dev/null | grep -iE 'nezha[-_]?agent|nezha[-_]?dashboard|/opt/nezha|/usr/local/bin/nezha')
+    ' </dev/null 2>/dev/null | grep -iE 'nezha[-_]?agent|nezha[-_]?dashboard|/opt/nezha|/usr/local/bin/nezha')
 
     if [ -n "$PROC_RESULT" ]; then
         DETAIL="${DETAIL}[进程] ${PROC_RESULT}"$'\n'
@@ -60,7 +59,7 @@ while IFS= read -r container; do
             /root/nezha_agent; do
             [ -e "$p" ] && echo "$p"
         done
-    ' 2>/dev/null)
+    ' </dev/null 2>/dev/null)
 
     if [ -n "$FILE_RESULT" ]; then
         DETAIL="${DETAIL}[文件] ${FILE_RESULT}"$'\n'
@@ -88,7 +87,7 @@ while IFS= read -r container; do
         for u in /var/spool/cron/crontabs/*; do
             [ -f "$u" ] && grep -i nezha "$u" 2>/dev/null && echo "cron: $u"
         done
-    ' 2>/dev/null)
+    ' </dev/null 2>/dev/null)
 
     if [ -n "$SVC_RESULT" ]; then
         DETAIL="${DETAIL}[服务] ${SVC_RESULT}"$'\n'
@@ -103,7 +102,7 @@ while IFS= read -r container; do
             [ -n "$line" ] && echo -e "      ${YELLOW}${line}${NC}"
         done
     fi
-done <<< "$RUNNING_CONTAINERS"
+done 3<<< "$RUNNING_CONTAINERS"
 
 echo ""
 echo ""
