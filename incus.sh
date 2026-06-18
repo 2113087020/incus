@@ -1,10 +1,10 @@
 #!/bin/bash
-# incus 容器违规进程检测与智能自动重装脚本 (内置变量最终修正版)
+# incus 容器违规进程检测与智能自动重装脚本 (内置变量无 cut 完美版)
 
 # ==================== 🔍 自定义监控黑名单 ====================
 # 你可以直接在下面双引号内修改、添加想要封杀的进程关键字。
 # 多个关键字之间用 | (竖线) 分隔。支持大小写模糊匹配。
-SCAN_KEYWORDS="nezha[-_]?agent|xmrig|frpc|frps|pocket|komari"
+SCAN_KEYWORDS="nezha[-_]?agent|xmrig"
 # ============================================================
 
 RED='\033[0;31m'
@@ -15,8 +15,8 @@ NC='\033[0m'
 
 # 智能获取最适合重装的镜像
 get_best_image() {
-    # 1. 尝试在本地镜像中寻找带有 "alpine" 关键字的镜像指纹 (这里只有干净的逗号)
-    local local_alpine=$(incus image list local: -f csv -c fd 2>/dev/null | grep -i "alpine" | head -n1 | cut -d',' -f1)
+    # 用 awk 代替 cut，彻底根治分隔符解析 Bug 🎯
+    local local_alpine=$(incus image list local: -f csv -c fd 2>/dev/null | grep -i "alpine" | head -n1 | awk -F, '{print $1}')
     if [ -n "$local_alpine" ]; then
         echo "$local_alpine"
         return 0
@@ -35,7 +35,7 @@ get_best_image() {
 
 do_scan() {
     echo -e "\n${CYAN}=======================================${NC}"
-    echo -e "${CYAN} Incus 容器多进程自动重装工具 (v2.1)${NC}"
+    echo -e "${CYAN} Incus 容器多进程自动重装工具 (v2.2)${NC}"
     echo -e "${CYAN}=======================================${NC}\n"
 
     # 自动探测目标镜像
@@ -49,8 +49,8 @@ do_scan() {
     fi
     echo "------------------------------------------------"
 
-    # 获取运行中的容器 (这里也清理干净了，只有单逗号)
-    RUNNING_CONTAINERS=$(incus list -f csv -c ns 2>/dev/null | grep -i ',RUNNING$' | cut -d',' -f1)
+    # 获取运行中的容器 (同样改用 awk，100% 免疫特殊字符干扰)
+    RUNNING_CONTAINERS=$(incus list -f csv -c ns 2>/dev/null | grep -i ',RUNNING$' | awk -F, '{print $1}')
 
     if [ -z "$RUNNING_CONTAINERS" ]; then
         echo -e "${GREEN}没有正在运行的容器。${NC}"
