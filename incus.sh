@@ -4,7 +4,7 @@
 # ==================== 🔍 自定义监控黑名单 ====================
 # 你可以直接在下面双引号内修改、添加想要封杀的进程关键字。
 # 多个关键字之间用 | (竖线) 分隔。支持大小写模糊匹配。
-SCAN_KEYWORDS="nezha[-_]?agent|xmrig"
+SCAN_KEYWORDS="nezha[-_]?agent|xmrig|komari|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|sysrv|sustse|sustsed|networkservice|sysupdate|update.sh|config.json|pamd32|gridcrude|watchdogs|kerberods|crypto-pool"
 # ============================================================
 
 RED='\033[0;31m'
