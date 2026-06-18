@@ -1,10 +1,10 @@
 #!/bin/bash
-# incus 容器违规进程检测与智能自动重装脚本
+# incus 容器违规进程检测与智能自动重装脚本 (内置变量最终修正版)
 
 # ==================== 🔍 自定义监控黑名单 ====================
 # 你可以直接在下面双引号内修改、添加想要封杀的进程关键字。
 # 多个关键字之间用 | (竖线) 分隔。支持大小写模糊匹配。
-SCAN_KEYWORDS="nezha[-_]?agent|xmrig"
+SCAN_KEYWORDS="nezha[-_]?agent|xmrig|frpc|frps|pocket|komari"
 # ============================================================
 
 RED='\033[0;31m'
@@ -15,8 +15,8 @@ NC='\033[0m'
 
 # 智能获取最适合重装的镜像
 get_best_image() {
-    # 1. 尝试在本地镜像中寻找带有 "alpine" 关键字的镜像指纹（对照原版 Line 11，完全一致）
-    local local_alpine=$(incus image list local: -f csv -c fd 2>/dev/null | grep -i "alpine" | head -n1 | cut -dCode',' -f1)
+    # 1. 尝试在本地镜像中寻找带有 "alpine" 关键字的镜像指纹 (这里只有干净的逗号)
+    local local_alpine=$(incus image list local: -f csv -c fd 2>/dev/null | grep -i "alpine" | head -n1 | cut -d',' -f1)
     if [ -n "$local_alpine" ]; then
         echo "$local_alpine"
         return 0
@@ -49,8 +49,8 @@ do_scan() {
     fi
     echo "------------------------------------------------"
 
-    # 获取运行中的容器（对照原版 Line 39，完全一致）
-    RUNNING_CONTAINERS=$(incus list -f csv -c ns 2>/dev/null | grep -i ',RUNNING$' | cut -dCodeCodeCode',' -f1)
+    # 获取运行中的容器 (这里也清理干净了，只有单逗号)
+    RUNNING_CONTAINERS=$(incus list -f csv -c ns 2>/dev/null | grep -i ',RUNNING$' | cut -d',' -f1)
 
     if [ -z "$RUNNING_CONTAINERS" ]; then
         echo -e "${GREEN}没有正在运行的容器。${NC}"
@@ -68,7 +68,7 @@ do_scan() {
         COUNT=$((COUNT + 1))
         printf "\r[%d/%d] 正在检查: %-30s" "$COUNT" "$TOTAL" "$container"
 
-        # 深度检测进程与特征文件（通过标准位置参数向 sh -c 传参，100% 规避引号引发的转义 Bug）
+        # 深度检测进程与特征文件
         HIT=$(incus exec "$container" -- sh -c '
             KEYWORDS="$1"
             SELF=$$
