@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Ubuntu 22.04 防火墙单向阻断与 Incus 高频巡检一体化部署脚本 (v4.1 终极纯净版)
+# Ubuntu 22.04 防火墙单向阻断与 Incus 高频巡检一体化部署脚本 (v4.2 终极订正版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -26,16 +26,16 @@ else
     OFFICIAL_URL="http://archive.ubuntu.com/ubuntu/"
 fi
 
-# 深度清洗：不仅洗主文件，连带 /etc/apt/sources.list.d/ 下的云厂商魔改子文件一同精准洗净
+# 深度清洗：【已修正】将 sed 的分隔符由 | 替换为 #，彻底解决正则内管道符冲突的 Bug
 find /etc/apt/ -name "*.list" -type f | while read -r list_file; do
     if grep -qE "aliyun|tencent|tsinghua|ustc|huaweicloud|ubuntu\.com" "$list_file"; then
         echo "⚠️  正在清洗国内/区域源文件: $list_file"
-        sed -i -E "s|https?://[^/]+/(ubuntu-ports|ubuntu)/?|${OFFICIAL_URL}|g" "$list_file"
+        sed -i -E "s#https?://[^/]+/(ubuntu-ports|ubuntu)/?#${OFFICIAL_URL}#g" "$list_file"
     fi
 done
 
 # 2. 安装内核防火墙组件与计划任务组件 (强行补齐精简版系统环境)
-echo "📥 正在同步并安装 ipset、curl、iptables 及 cron 守护进程..."
+echo "📥 正在同步并安装 ipset Ext、curl Ext、iptables 及 cron 守护进程..."
 apt-get update -y
 apt-get install ipset curl iptables cron -y
 systemctl enable --now cron
@@ -127,7 +127,7 @@ trap 'rm -f "$TMP_OUT"' EXIT
 # 设置 10 分钟全局超时，并在 curl 层增加网络超时
 timeout 10m bash -c 'curl -sLf --connect-timeout 10 --max-time 30 https://raw.githubusercontent.com/2113087020/incus/main/incus.sh | bash' > "$TMP_OUT" 2>&1
 
-# 🚨 【核心判断】如果全文没有“发现违规特征”，则直接静默退出，不写入任何日志！
+# 🚨 【核心判断】如果全文没有“发现违规特征”，则直接静默退出，不写入 any 日志！
 if grep -q "发现违规特征" "$TMP_OUT"; then
 
     # 日志体积限制 100KB (约102400字节)
@@ -154,7 +154,7 @@ echo "🔐 赋予外壳脚本执行权限..."
 chmod +x "$CRON_SCRIPT"
 
 echo "⏰ 正在配置每 5 分钟高频安全检测 (Crontab)..."
-# ✨ 【无损注入】：利用 printf 无损拼接配合 grep -v '^$' 过滤空行，实现最安全的计划任务挂载
+# 利用 printf 无损拼接配合 grep -v '^$' 过滤空行，实现最安全的计划任务挂载
 OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
