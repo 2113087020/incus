@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Ubuntu/Debian 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.0 双核封板版)
+# Ubuntu/Debian 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.1 精准定位版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -15,11 +15,13 @@ echo "=================================================="
 echo "🛡️  第一阶段：配置单向阻断防火墙 (Host + Incus)"
 echo "=================================================="
 
-# 1. 操作系统与架构自适应，全局软件源深度安全清洗 (完美兼容 Ubuntu / Debian)
+# 1. 变量化自适应解析，彻底解决 Ubuntu/Debian 模糊血统误判 Bug
 echo "📦 正在全盘扫描并自适应修正系统 APT 软件源..."
 OS_TYPE="ubuntu"
 if [ -f /etc/os-release ]; then
-    if grep -qi "debian" /etc/os-release; then
+    # 🌟 核心修正：直接注入系统变量，拒绝 grep 模糊匹配带来的 ID_LIKE 干扰
+    . /etc/os-release
+    if [ "$ID" = "debian" ]; then
         OS_TYPE="debian"
     fi
 fi
@@ -27,12 +29,11 @@ fi
 ARCH=$(dpkg --print-architecture)
 
 if [ "$OS_TYPE" = "debian" ]; then
-    echo "ℹ️  检测到 Debian 系统，官方源锁向 deb.debian.org"
+    echo "ℹ️  检测到纯正 Debian 系统，官方源锁向 deb.debian.org"
     OFFICIAL_URL="http://deb.debian.org/debian/"
-    # 精准清洗国内大厂的 Debian 镜像源路径，绝不误伤三方自定义源
     MATCH_REGEX="s#https?://[^/]*(aliyun|tencent|tsinghua|ustc|huaweicloud)[^/]*/debian/?#${OFFICIAL_URL}#g"
 else
-    echo "ℹ️  检测到 Ubuntu 系统..."
+    echo "ℹ️  检测到纯正 Ubuntu 系统..."
     if [ "$ARCH" = "arm64" ]; then
         echo "ℹ️  检测到 ARM64 架构，官方源锁向 ports.ubuntu.com"
         OFFICIAL_URL="http://ports.ubuntu.com/ubuntu-ports/"
@@ -178,6 +179,5 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【通用核准封板】！"
-echo "ℹ️  智能识别：原生支持 Ubuntu 22.04 与 Debian 11/12 跨系统自适应换源。"
-echo "ℹ️  防线稳固：规则倒序安全堆叠，全局自愈与定时置顶已进入最高戒备状态。"
+echo "✅ 全套一体化安全配置【v5.1 精准完全体封板】！"
+echo "ℹ️  Bug 修正：通过系统内置核心变量精确定位，Ubuntu 22.04 稳稳识别，绝不踩雷。"
