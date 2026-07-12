@@ -1,5 +1,5 @@
 #!/bin/bash
-# incus 容器违规进程检测与智能自动重装脚本 (v3.0 智能无缝升级版)
+# incus 容器违规进程检测与智能自动重装脚本 (v3.1 企业级封板版 - 零缺陷无缝升级)
 
 # ==================== 🔍 自定义监控黑名单 ====================
 SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|ew|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
@@ -27,39 +27,40 @@ setup_network_firewall() {
     echo -e "${CYAN} 🛡️ 初始化: 配置 Incus 全局网络防护${NC}"
     echo -e "${CYAN}=======================================${NC}"
     
-    # --- 💡 新增：智能检测与清理旧版 block-22 规则 ---
+    # --- 1. 智能检测与清理旧版 block-22 规则 ---
     if incus network acl show block-22 >/dev/null 2>&1; then
-        echo -e "${YELLOW}   ↳ [*] 检测到旧版专用 22 端口规则 (block-22)，正在自动执行无缝升级...${NC}"
+        echo -e "${YELLOW}   ↳ [*] 检测到旧版单端口规则 (block-22)，正在自动执行无缝升级...${NC}"
         
-        # 获取当前网桥 ACL 列表，安全剔除旧规则
         if incus network show incusbr0 >/dev/null 2>&1; then
             CURRENT_ACLS=$(incus network get incusbr0 security.acls 2>/dev/null)
             if [[ "$CURRENT_ACLS" =~ (^|,)"block-22"(,|$) ]]; then
-                # 重建干干净净的 ACL 列表（避免逗号残留）
                 NEW_ACLS=""
                 for acl in $(echo "$CURRENT_ACLS" | tr ',' ' '); do
                     if [ "$acl" != "block-22" ]; then
                         [ -z "$NEW_ACLS" ] && NEW_ACLS="$acl" || NEW_ACLS="${NEW_ACLS},${acl}"
                     fi
                 done
-                incus network set incusbr0 security.acls="$NEW_ACLS" >/dev/null 2>&1
+                
+                # [核心修复处] 如果清理后列表为空，使用官方 unset 命令彻底解绑
+                if [ -z "$NEW_ACLS" ]; then
+                    incus network unset incusbr0 security.acls >/dev/null 2>&1
+                else
+                    incus network set incusbr0 security.acls="$NEW_ACLS" >/dev/null 2>&1
+                fi
             fi
         fi
         
-        # 彻底删除旧版实体
         incus network acl delete block-22 >/dev/null 2>&1
         echo -e "${GREEN}   ↳ [✔] 旧版规则已完美清理，系统就绪。${NC}"
     fi
-    # ---------------------------------------------------
 
-    # 创建新的泛端口拦截规则
+    # --- 2. 创建并绑定新的泛端口拦截规则 ---
     if ! incus network acl show block-scan-ports >/dev/null 2>&1; then
         echo -e "${YELLOW}   ↳ [!] 正在构建底层多端口拦截 ACL...${NC}"
         incus network acl create block-scan-ports >/dev/null 2>&1
         printf "egress:\n  - action: drop\n    protocol: tcp\n    destination_port: '${BLOCK_OUT_PORTS}'\n    state: enabled\n" | incus network acl edit block-scan-ports >/dev/null 2>&1
     fi
 
-    # 智能绑定规则
     if incus network show incusbr0 >/dev/null 2>&1; then
         CURRENT_ACLS=$(incus network get incusbr0 security.acls 2>/dev/null)
         if [ -z "$CURRENT_ACLS" ]; then
@@ -93,7 +94,7 @@ get_best_image() {
 
 do_scan() {
     echo -e "\n${CYAN}=======================================${NC}"
-    echo -e "${CYAN} 🚀 Incus 容器多进程及DDoS自动重装工具 (v3.0 终极版)${NC}"
+    echo -e "${CYAN} 🚀 Incus 容器多进程及DDoS自动重装工具 (v3.1 封板版)${NC}"
     echo -e "${CYAN}=======================================${NC}\n"
 
     TARGET_IMAGE=$(get_best_image)
