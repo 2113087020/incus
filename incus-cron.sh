@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.7 终极无损安装版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.8 终极完美版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -66,7 +66,7 @@ find /etc/apt/ -name "*.list" -type f | while read -r list_file; do
     fi
 done
 
-# 2. 🧱【核心修正一】：在安装 dnsmasq 前，提前铲除 systemd-resolved 并建立临时 DNS 桥梁
+# 2. 提前关停 systemd-resolved 并建立临时 DNS 桥梁
 echo "🛑 正在关停 systemd-resolved 并临时接管 DNS 以防解析死锁..."
 systemctl stop systemd-resolved || true
 systemctl disable systemd-resolved || true
@@ -76,13 +76,10 @@ rm -f /etc/resolv.conf
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 
 # 3. 安装内核防火墙组件、DNS解析组件与计划任务组件
-echo "📥 正在同步并安装 ipset、curl、iptables、dnsutils 及 cron..."
+echo "📥 正在同步并安装 ipset、curl、iptables、dnsmasq、dnsutils 及 cron..."
 apt-get update -y
-apt-get install ipset curl iptables dnsutils cron -y
+apt-get install ipset curl iptables dnsmasq dnsutils cron -y
 
-# 🧱【核心修正二】：解耦安装 dnsmasq，防止其默认服务因配置冲突在安装阶段报错阻断整个脚本
-echo "📥 正在安装 dnsmasq 服务..."
-DEBIAN_FRONTEND=noninteractive apt-get install dnsmasq -y || true
 systemctl enable cron
 
 # 4. 创建配置目录并预下载中国 IP 库 (此时有临时 DNS 保护，下载绝对稳过)
@@ -93,7 +90,7 @@ curl -sLf http://www.ipdeny.com/ipblocks/data/countries/cn.zone | awk '{print "a
 # 5. 生成统一白名单配置文件
 echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.7 托管配置)
+# 自动生成的白名单配置文件 (由部署脚本 v5.8 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
@@ -124,7 +121,7 @@ DNS
 # 重启宿主机 dnsmasq 使其上岗 (由于已经写入了 bind-interfaces，此时启动绝不冲突)
 systemctl restart dnsmasq || systemctl start dnsmasq
 
-# 7. 🚀【核心接力】：将宿主全局 DNS 彻底移交给已经正常上岗的本地线人
+# 7. 将宿主全局 DNS 彻底移交给已经正常上岗的本地线人
 rm -f /etc/resolv.conf
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "ℹ️  宿主机系统 DNS 已锁定至本地安全环回解析器"
@@ -237,7 +234,12 @@ SERVICE
 
 systemctl daemon-reload
 systemctl enable custom-firewall.service
-systemctl start custom-firewall.service
+
+# 🌟 核心修正一：使用 restart 强行打穿 Systemd Oneshot 缓存，重构规则并执行
+systemctl restart custom-firewall.service
+
+# 🌟 核心修正二：在 shell 现场立刻强行跑一次初始化，确保 0 秒延迟当场生效！
+/etc/iptables-custom/init.sh
 
 
 echo -e "\n=================================================="
@@ -282,5 +284,6 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.7 宿主专属无损完全体版】！"
-echo "ℹ️  安装死锁已彻底破除，系统 DNS 现已完美无缝过渡至本地 dnsmasq 动态盯梢系统。"
+echo "✅ 全套一体化安全配置【v5.8 宿主专属无损完全体版】！"
+echo "ℹ️  单向阻断：Incus 容器处于绝对封闭隔离状态，不豁免任何白名单。"
+echo "ℹ️  宿主动态放行：仅放行宿主机自身的 CDN 白名单解析与连接。"
