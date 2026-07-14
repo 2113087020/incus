@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.2 终极白名单版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.3 动态双核白名单版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -34,7 +34,7 @@ echo "=================================================="
 echo "📦 正在全盘扫描并自适应修正系统 APT 软件源..."
 OS_TYPE="ubuntu"
 if [ -f /etc/os-release ]; then
-    # 🌟 核心修正：直接导入系统变量，拒绝 grep 模糊匹配带来的 ID_LIKE 干扰
+    # 直接导入系统变量，拒绝 grep 模糊匹配带来的 ID_LIKE 干扰
     . /etc/os-release
     if [ "$ID" = "debian" ]; then
         OS_TYPE="debian"
@@ -81,7 +81,7 @@ curl -sLf http://www.ipdeny.com/ipblocks/data/countries/cn.zone | awk '{print "a
 # 4. 生成统一白名单配置文件 (供开机自愈与定时任务共享，优雅解耦)
 echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.2 托管配置)
+# 自动生成的白名单配置文件 (由部署脚本 v5.3 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
@@ -91,7 +91,14 @@ $(printf "    \"%s\"\n" "${WHITELIST_IPS[@]}")
 )
 EOF
 
-# 5. 生成独立的本地防火墙原子初始化脚本 (基于位置 1 倒序安全堆叠)
+# 5. 🔥【核心新增】：配置 Incus 网桥 DNS 动态白名单线人
+if command -v incus &>/dev/null; then
+    echo "⚙️  正在向 Incus 网桥配置 raw.dnsmasq 动态白名单规则..."
+    # 配置 dnsmasq 在解析 zstaticcdn.com 及其所有子域名时，自动将 IP 写入 whitelist_ips_dynamic 集合
+    incus network set incusbr0 raw.dnsmasq "ipset=/zstaticcdn.com/whitelist_ips_dynamic" || true
+fi
+
+# 6. 生成独立的本地防火墙原子初始化脚本 (区分静态与动态白名单，保障不掉线)
 echo "📝 正在构建本地独立防火墙自愈脚本..."
 cat << 'INIT' > "$INIT_SCRIPT"
 #!/bin/bash
@@ -108,22 +115,24 @@ if [ -f "$CONF_DIR/cnip.list" ]; then
     ipset restore < "$CONF_DIR/cnip.list"
 fi
 
-# 创建 IP 动态白名单集合
-ipset create whitelist_ips hash:net 2>/dev/null || ipset flush whitelist_ips
+# 创建 IP 静态与动态白名单集合
+ipset create whitelist_ips_static hash:net 2>/dev/null || ipset flush whitelist_ips_static
+# 🌟 核心保护：动态集合仅在不存在时创建，绝不执行 flush，完美保留已建立连接的 CDN 动态 IP
+ipset create whitelist_ips_dynamic hash:net 2>/dev/null || true
 
-# 自动解析白名单域名的当前 IP 并追加进内核白名单
+# 自动解析白名单域名的当前 IP 并追加进静态白名单
 for domain in "${WHITELIST_DOMAINS[@]}"; do
     # 清除通配符前缀方便 DNS 正常解析
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     ips=$(dig +short "$clean_domain" 2>/dev/null | grep -E '^[0-9.]+$') || true
     for ip in $ips; do
-        ipset add whitelist_ips "$ip" 2>/dev/null || true
+        ipset add whitelist_ips_static "$ip" 2>/dev/null || true
     done
 done
 
 # 追加手动写入的白名单静态 IP
 for ip in "${WHITELIST_IPS[@]}"; do
-    ipset add whitelist_ips "$ip" 2>/dev/null || true
+    ipset add whitelist_ips_static "$ip" 2>/dev/null || true
 done
 
 # 强力排空所有旧规则，防止垃圾堆叠
@@ -134,9 +143,12 @@ while iptables -D OUTPUT -p tcp --dport 53 -m string --hex-string "|02636e00|" -
 while iptables -D FORWARD -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 
-# 清理旧 of 白名单放行规则
-while iptables -D OUTPUT -m set --match-set whitelist_ips dst -j ACCEPT 2>/dev/null; do :; done
-while iptables -D FORWARD -m set --match-set whitelist_ips dst -j ACCEPT 2>/dev/null; do :; done
+# 清理旧的白名单放行规则
+while iptables -D OUTPUT -m set --match-set whitelist_ips_static dst -j ACCEPT 2>/dev/null; do :; done
+while iptables -D FORWARD -m set --match-set whitelist_ips_static dst -j ACCEPT 2>/dev/null; do :; done
+while iptables -D OUTPUT -m set --match-set whitelist_ips_dynamic dst -j ACCEPT 2>/dev/null; do :; done
+while iptables -D FORWARD -m set --match-set whitelist_ips_dynamic dst -j ACCEPT 2>/dev/null; do :; done
+
 for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     while iptables -D OUTPUT -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT 2>/dev/null; do :; done
@@ -164,14 +176,16 @@ for domain in "${WHITELIST_DOMAINS[@]}"; do
     iptables -I FORWARD 1 -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
 done
 
-# 🧱【第一优先级：IP 放行白名单】(最高顺位，任何连接优先看它)
-iptables -I OUTPUT 1 -m set --match-set whitelist_ips dst -j ACCEPT
-iptables -I FORWARD 1 -m set --match-set whitelist_ips dst -j ACCEPT
+# 🧱【第一优先级：IP 放行白名单】 (最高顺位，静态与动态白名单合并置顶)
+iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
+iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
+iptables -I FORWARD 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
+iptables -I FORWARD 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
 INIT
 
 chmod +x "$INIT_SCRIPT"
 
-# 6. 构建 systemd 服务实现开机自愈托管
+# 7. 构建 systemd 服务实现开机自愈托管
 echo "⚙️ 正在构建守护服务，彻底锁定开机加载顺序..."
 cat << 'SERVICE' > /etc/systemd/system/custom-firewall.service
 [Unit]
@@ -235,5 +249,5 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.2 通用完全体封板】！"
+echo "✅ 全套一体化安全配置【v5.3 动态双核白名单完全体封板】！"
 echo "ℹ️  Bug 修正：通过系统内核变量导入，Ubuntu 22.04 稳稳识别，Debian 开箱即用。"
