@@ -134,7 +134,7 @@ while iptables -D OUTPUT -p tcp --dport 53 -m string --hex-string "|02636e00|" -
 while iptables -D FORWARD -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 
-# 清理旧的白名单放行规则
+# 清理旧 of 白名单放行规则
 while iptables -D OUTPUT -m set --match-set whitelist_ips dst -j ACCEPT 2>/dev/null; do :; done
 while iptables -D FORWARD -m set --match-set whitelist_ips dst -j ACCEPT 2>/dev/null; do :; done
 for domain in "${WHITELIST_DOMAINS[@]}"; do
@@ -237,4 +237,3 @@ printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | cronta
 echo "------------------------------------------------"
 echo "✅ 全套一体化安全配置【v5.2 通用完全体封板】！"
 echo "ℹ️  Bug 修正：通过系统内核变量导入，Ubuntu 22.04 稳稳识别，Debian 开箱即用。"
-echo "ℹ️  白名单库：已无缝集成 ZStaticCDN，且在 Crontab 自愈时会动态重解析放行 IP。"
