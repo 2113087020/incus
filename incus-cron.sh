@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.9.2 终极无损版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.10 终极防死锁版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -29,6 +29,14 @@ LOG_FILE="/var/log/incus_clean.log"
 echo "=================================================="
 echo "🛡️  第一阶段：配置单向阻断防火墙与宿主 DNS 劫持"
 echo "=================================================="
+
+# 🔥【核心保障】：临时彻底释放所有可能残存的旧版 NAT 劫持与 FILTER 阻断，防止部署期死锁
+echo "🧹 正在释放可能残存的旧版劫持与阻断规则，确保部署通道 100% 畅通..."
+while iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
+while iptables -t nat -D OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
+while iptables -D OUTPUT -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
+rm -f /etc/resolv.conf
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
 
 # 1. 变量化自适应解析，彻底解决 Ubuntu/Debian 模糊血统误判 Bug
 echo "📦 正在全盘扫描并自适应修正系统 APT 软件源..."
@@ -100,7 +108,7 @@ curl -sLf https://cdn.jsdelivr.net/gh/ipverse/country-ip-blocks@master/country/c
 # 5. 生成统一白名单配置文件
 echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.9.2 托管配置)
+# 自动生成的白名单配置文件 (由部署脚本 v5.10 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
@@ -135,7 +143,7 @@ fi
 
 # 创建 IP 静态与动态白名单集合
 ipset create whitelist_ips_static hash:net 2>/dev/null || ipset flush whitelist_ips_static
-# 动态集合绝不 flush，完美保留已建立连接的 CDN 动态 IP
+# 动态集合绝不 flush，完美保留已建立连接 the CDN 动态 IP
 ipset create whitelist_ips_dynamic hash:net 2>/dev/null || true
 
 # 自动解析白名单域名的当前 IP 并追加进静态白名单
@@ -292,6 +300,6 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.9.2 宿主专属无损完全体版】！"
+echo "✅ 全套一体化安全配置【v5.10 宿主专属无损完全体版】！"
 echo "ℹ️  极速 IP：中国 IP 库已通过 ipverse 官方源刷新装载。"
 echo "ℹ️  宿主动态放行：仅放行宿主机自身的 CDN 白名单解析与连接。"
