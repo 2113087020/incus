@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.9.1 终极无损版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.9.2 终极无损版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -92,7 +92,7 @@ systemctl enable --now cron
 # 重启或启动 dnsmasq 服务
 systemctl restart dnsmasq || systemctl start dnsmasq
 
-# 4. 🚀【核心修正】：改用 ipverse 官方高频维护的国内 IP 镜像库（彻底干掉 404 死锁）
+# 4. 改用 ipverse 官方高频维护的国内 IP 镜像库
 echo "🌐 正在下载并生成最新中国大陆 IP 基础库 (ipset)..."
 mkdir -p "$CONF_DIR"
 curl -sLf https://cdn.jsdelivr.net/gh/ipverse/country-ip-blocks@master/country/cn/ipv4-aggregated.txt | tr -d '\r' | awk '/^[0-9]/ {print "add cnip " $1}' > "$CONF_DIR/cnip.list"
@@ -100,7 +100,7 @@ curl -sLf https://cdn.jsdelivr.net/gh/ipverse/country-ip-blocks@master/country/c
 # 5. 生成统一白名单配置文件
 echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.9.1 托管配置)
+# 自动生成的白名单配置文件 (由部署脚本 v5.9.2 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
@@ -116,10 +116,10 @@ if command -v incus &>/dev/null; then
     incus network unset incusbr0 raw.dnsmasq || true
 fi
 
-# 7. 生成独立的本地防火墙原子初始化脚本 (包含 NAT 劫持、Loop 防护与 OUTPUT 斩杀)
+# 7. 生成独立的本地防火墙原子初始化脚本 (已彻底修复 Shebang Typo)
 echo "📝 正在构建本地独立防火墙自愈脚本..."
 cat << 'INIT' > "$INIT_SCRIPT"
-#!/bash
+#!/bin/bash
 CONF_DIR="/etc/iptables-custom"
 
 # 载入统一白名单配置
@@ -292,6 +292,6 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.9.1 宿主专属无损完全体版】！"
+echo "✅ 全套一体化安全配置【v5.9.2 宿主专属无损完全体版】！"
 echo "ℹ️  极速 IP：中国 IP 库已通过 ipverse 官方源刷新装载。"
 echo "ℹ️  宿主动态放行：仅放行宿主机自身的 CDN 白名单解析与连接。"
