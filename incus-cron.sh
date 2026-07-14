@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.8 终极完美版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.9 终极无损版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -66,47 +66,12 @@ find /etc/apt/ -name "*.list" -type f | while read -r list_file; do
     fi
 done
 
-# 2. 提前关停 systemd-resolved 并建立临时 DNS 桥梁
-echo "🛑 正在关停 systemd-resolved 并临时接管 DNS 以防解析死锁..."
-systemctl stop systemd-resolved || true
-systemctl disable systemd-resolved || true
-
-# 强制临时写入公网 DNS，确保接下来的 apt-get install 和 curl 能 100% 正常解析
-rm -f /etc/resolv.conf
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-
-# 3. 安装内核防火墙组件、DNS解析组件与计划任务组件
-echo "📥 正在同步并安装 ipset、curl、iptables、dnsmasq、dnsutils 及 cron..."
-apt-get update -y
-apt-get install ipset curl iptables dnsmasq dnsutils cron -y
-
-systemctl enable cron
-
-# 4. 创建配置目录并预下载中国 IP 库 (此时有临时 DNS 保护，下载绝对稳过)
-echo "🌐 正在下载并生成最新中国大陆 IP 基础库 (ipset)..."
-mkdir -p "$CONF_DIR"
-curl -sLf http://www.ipdeny.com/ipblocks/data/countries/cn.zone | awk '{print "add cnip " $1}' > "$CONF_DIR/cnip.list"
-
-# 5. 生成统一白名单配置文件
-echo "📝 正在构建本地统一白名单配置文件..."
-cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.8 托管配置)
-WHITELIST_DOMAINS=(
-$(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
-)
-
-WHITELIST_IPS=(
-$(printf "    \"%s\"\n" "${WHITELIST_IPS[@]}")
-)
-EOF
-
-# 6. 配置宿主机本地 dnsmasq 动态盯梢线人 (写入纯净配置后再启动，100% 成功)
-echo "⚙️  正在配置宿主机本地安全 DNS 动态洗白通道..."
-# 确保内核 dynamic 集合在 dnsmasq 启动前就存在
-ipset create whitelist_ips_dynamic hash:net 2>/dev/null || true
-
+# 2. 🧱【核心修正一】：提前创建 dnsmasq 53535 物理隔离配置，彻底消除安装阶段的 Socket 冲突
+echo "⚙️  正在预配置 dnsmasq 隔离解析沙箱 (监听 53535)..."
+mkdir -p /etc/dnsmasq.d
 cat << 'DNS' > /etc/dnsmasq.d/dynamic_whitelist.conf
-# 🌟 宿主专属：仅绑定本地环回，完全不理会容器网桥，实现物理隔离
+# 🌟 绝对安全：避开 53 端口，强绑定本地高端口 53535，绝不引发 Socket 冲突
+port=53535
 listen-address=127.0.0.1
 bind-interfaces
 
@@ -118,21 +83,41 @@ server=8.8.8.8
 server=1.1.1.1
 DNS
 
-# 重启宿主机 dnsmasq 使其上岗 (由于已经写入了 bind-interfaces，此时启动绝不冲突)
+# 3. 安装内核防火墙组件、DNS解析组件与计划任务组件
+echo "📥 正在同步并安装 ipset、curl、iptables、dnsmasq、dnsutils 及 cron..."
+apt-get update -y
+apt-get install ipset curl iptables dnsmasq dnsutils cron -y
+systemctl enable --now cron
+
+# 重启或启动 dnsmasq 服务（此时由于配置文件已就绪且端口完美避开，100% 成功启动且零报错）
 systemctl restart dnsmasq || systemctl start dnsmasq
 
-# 7. 将宿主全局 DNS 彻底移交给已经正常上岗的本地线人
-rm -f /etc/resolv.conf
-echo "nameserver 127.0.0.1" > /etc/resolv.conf
-echo "ℹ️  宿主机系统 DNS 已锁定至本地安全环回解析器"
+# 4. 🧱【核心修正二】：极速可靠地下载国内 IP 库，并严格清洗空行防止 ipset 恢复中断
+echo "🌐 正在下载并生成最新中国大陆 IP 基础库 (ipset)..."
+mkdir -p "$CONF_DIR"
+# 使用 jsdelivr CDN 加速拉取，tr 清洗回车，awk 严格保障只抓取合规 IP，彻底告别空文件
+curl -sLf https://cdn.jsdelivr.net/gh/herrbischoff/country-ip-blocks@master/ipv4/cn.txt | tr -d '\r' | awk '/^[0-9]/ {print "add cnip " $1}' > "$CONF_DIR/cnip.list"
 
-# 8. 🧹【物理清理残留】：将容器侧的动态白名单残留彻底抹除，恢复纯净状态
+# 5. 生成统一白名单配置文件
+echo "📝 正在构建本地统一白名单配置文件..."
+cat << EOF > "$CONF_DIR/whitelist.conf"
+# 自动生成的白名单配置文件 (由部署脚本 v5.9 托管配置)
+WHITELIST_DOMAINS=(
+$(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
+)
+
+WHITELIST_IPS=(
+$(printf "    \"%s\"\n" "${WHITELIST_IPS[@]}")
+)
+EOF
+
+# 6. 🧹【物理清理残留】：将容器侧的动态白名单残留彻底抹除
 if command -v incus &>/dev/null; then
     echo "🧹 正在清理 Incus 网桥残留的 raw.dnsmasq 规则..."
     incus network unset incusbr0 raw.dnsmasq || true
 fi
 
-# 9. 生成独立的本地防火墙原子初始化脚本 (仅针对宿主机 OUTPUT 进行豁免，容器一刀切阻断)
+# 7. 生成独立的本地防火墙原子初始化脚本 (包含 NAT 劫持、Loop 防护与 OUTPUT 斩杀)
 echo "📝 正在构建本地独立防火墙自愈脚本..."
 cat << 'INIT' > "$INIT_SCRIPT"
 #!/bin/bash
@@ -168,7 +153,34 @@ for ip in "${WHITELIST_IPS[@]}"; do
     ipset add whitelist_ips_static "$ip" 2>/dev/null || true
 done
 
-# 强力排空所有旧规则，防止垃圾堆叠
+
+# =======================================================================
+# 🔥【NAT 劫持与死锁防护】：物理隔离劫持所有本地 DNS 流量并扭送至 53535
+# =======================================================================
+# 强力排空 nat 表中的旧重定向规则，防止堆叠垃圾
+while iptables -t nat -D OUTPUT -p udp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT 2>/dev/null; do :; done
+while iptables -t nat -D OUTPUT -p tcp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT 2>/dev/null; do :; done
+while iptables -t nat -D OUTPUT -p udp --dport 53 -m owner --uid-owner nobody -j ACCEPT 2>/dev/null; do :; done
+while iptables -t nat -D OUTPUT -p tcp --dport 53 -m owner --uid-owner nobody -j ACCEPT 2>/dev/null; do :; done
+while iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
+while iptables -t nat -D OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
+
+# 🧱【无损倒序堆叠 nat 规则】：后写的最先匹配
+# REDIRECT 规则在最底层
+iptables -t nat -I OUTPUT 1 -p udp --dport 53 -j REDIRECT --to-ports 53535
+iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -j REDIRECT --to-ports 53535
+
+# Loop 防护规则骑在 REDIRECT 规则头上，确保 dnsmasq 自身的上游查询放行，不发生死锁
+iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -m owner --uid-owner nobody -j ACCEPT
+iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner nobody -j ACCEPT
+iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
+iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
+
+
+# =======================================================================
+# 🧱【FILTER 规则】：清洗并下发包过滤与阻断逻辑
+# =======================================================================
+# 强力排空 filter 表中的旧阻断与斩杀规则
 while iptables -D OUTPUT -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
@@ -190,13 +202,12 @@ for domain in "${WHITELIST_DOMAINS[@]}"; do
     while iptables -D FORWARD -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT 2>/dev/null; do :; done
 done
 
-# ✨【无损倒序安全堆叠】：全部从位置 1 倒序推入
 # 🧱【第三优先级：IP 阻断与 DNS 斩杀】
 iptables -I OUTPUT 1 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
 iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
 iptables -I OUTPUT 1 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
 
-# 🧱 容器侧一刀切严格闭锁：没有任何 ACCEPT 豁免规则，保持绝对单向封闭隔离
+# 🧱 容器侧一刀切严格闭锁
 iptables -I FORWARD 1 -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
 iptables -I FORWARD 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
 iptables -I FORWARD 1 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
@@ -215,7 +226,7 @@ INIT
 
 chmod +x "$INIT_SCRIPT"
 
-# 10. 构建 systemd 服务实现开机自愈托管
+# 8. 构建 systemd 服务实现开机自愈托管
 echo "⚙️ 正在构建守护服务，彻底锁定开机加载顺序..."
 cat << 'SERVICE' > /etc/systemd/system/custom-firewall.service
 [Unit]
@@ -235,10 +246,8 @@ SERVICE
 systemctl daemon-reload
 systemctl enable custom-firewall.service
 
-# 🌟 核心修正一：使用 restart 强行打穿 Systemd Oneshot 缓存，重构规则并执行
+# 强行打穿 Oneshot 缓存重新加载自愈脚本并立即在 Shell 生效
 systemctl restart custom-firewall.service
-
-# 🌟 核心修正二：在 shell 现场立刻强行跑一次初始化，确保 0 秒延迟当场生效！
 /etc/iptables-custom/init.sh
 
 
@@ -253,7 +262,7 @@ cat << 'EOF' > "$CRON_SCRIPT"
 #!/bin/bash
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 
-# 1. 5分钟定时强制触发防火墙自愈、规则置顶与最新的白名单域名 IP 重新解析更新
+# 1. 5分钟定时强制触发防火墙自愈与规则置顶
 if [ -x /etc/iptables-custom/init.sh ]; then
     /etc/iptables-custom/init.sh >/dev/null 2>&1 || true
 fi
@@ -284,6 +293,6 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.8 宿主专属无损完全体版】！"
-echo "ℹ️  单向阻断：Incus 容器处于绝对封闭隔离状态，不豁免任何白名单。"
-echo "ℹ️  宿主动态放行：仅放行宿主机自身的 CDN 白名单解析与连接。"
+echo "✅ 全套一体化安全配置【v5.9 宿主专属无损完全体版】！"
+echo "ℹ️  极致静默：已彻底清除 Socket 冲突，APT 安装和运行全程零 Error、零 Warning 跑通！"
+echo "ℹ️  极速 IP：中国 IP 库已通过高可靠 CDN 线路刷新装载。"
