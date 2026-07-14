@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.3 动态双核白名单版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.4 零警告白名单版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -81,7 +81,7 @@ curl -sLf http://www.ipdeny.com/ipblocks/data/countries/cn.zone | awk '{print "a
 # 4. 生成统一白名单配置文件 (供开机自愈与定时任务共享，优雅解耦)
 echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.3 托管配置)
+# 自动生成的白名单配置文件 (由部署脚本 v5.4 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
@@ -91,14 +91,13 @@ $(printf "    \"%s\"\n" "${WHITELIST_IPS[@]}")
 )
 EOF
 
-# 5. 🔥【核心新增】：配置 Incus 网桥 DNS 动态白名单线人
+# 5. 配置 Incus 网桥 DNS 动态白名单线人 (已修正为等号语法，彻底消除 Warn 警告)
 if command -v incus &>/dev/null; then
     echo "⚙️  正在向 Incus 网桥配置 raw.dnsmasq 动态白名单规则..."
-    # 配置 dnsmasq 在解析 zstaticcdn.com 及其所有子域名时，自动将 IP 写入 whitelist_ips_dynamic 集合
-    incus network set incusbr0 raw.dnsmasq "ipset=/zstaticcdn.com/whitelist_ips_dynamic" || true
+    incus network set incusbr0 raw.dnsmasq="ipset=/zstaticcdn.com/whitelist_ips_dynamic" || true
 fi
 
-# 6. 生成独立的本地防火墙原子初始化脚本 (区分静态与动态白名单，保障不掉线)
+# 6. 生成独立的本地防火墙原子初始化脚本 (基于位置 1 倒序安全堆叠)
 echo "📝 正在构建本地独立防火墙自愈脚本..."
 cat << 'INIT' > "$INIT_SCRIPT"
 #!/bin/bash
@@ -117,7 +116,7 @@ fi
 
 # 创建 IP 静态与动态白名单集合
 ipset create whitelist_ips_static hash:net 2>/dev/null || ipset flush whitelist_ips_static
-# 🌟 核心保护：动态集合仅在不存在时创建，绝不执行 flush，完美保留已建立连接的 CDN 动态 IP
+# 动态集合仅在不存在时创建，绝不执行 flush，完美保留已建立连接的 CDN 动态 IP
 ipset create whitelist_ips_dynamic hash:net 2>/dev/null || true
 
 # 自动解析白名单域名的当前 IP 并追加进静态白名单
@@ -143,7 +142,7 @@ while iptables -D OUTPUT -p tcp --dport 53 -m string --hex-string "|02636e00|" -
 while iptables -D FORWARD -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 
-# 清理旧的白名单放行规则
+# 清理旧 of 白名单放行规则
 while iptables -D OUTPUT -m set --match-set whitelist_ips_static dst -j ACCEPT 2>/dev/null; do :; done
 while iptables -D FORWARD -m set --match-set whitelist_ips_static dst -j ACCEPT 2>/dev/null; do :; done
 while iptables -D OUTPUT -m set --match-set whitelist_ips_dynamic dst -j ACCEPT 2>/dev/null; do :; done
@@ -249,5 +248,5 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.3 动态双核白名单完全体封板】！"
+echo "✅ 全套一体化安全配置【v5.4 动态双核白名单完全体封板】！"
 echo "ℹ️  Bug 修正：通过系统内核变量导入，Ubuntu 22.04 稳稳识别，Debian 开箱即用。"
