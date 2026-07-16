@@ -1,5 +1,5 @@
 #!/bin/bash
-# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.2 终极纠偏修复版)
+# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.3 终极项目轮询版)
 
 SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|ew|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
 MAX_TCP_CONN=500
@@ -55,6 +55,7 @@ echo -e "\n${CYAN}=======================================${NC}"
 echo -e "${CYAN} 🚀 阶段二: 容器内部违规进程与 DDoS 行为清查${NC}"
 echo -e "${CYAN}=======================================${NC}\n"
 
+# 智能匹配重装镜像
 local_alpine=$(incus image list local: -f csv -c fd < /dev/null 2>/dev/null | grep -i "alpine" | head -n1 | awk -F, '{print $1}')
 if [ -n "$local_alpine" ]; then
     TARGET_IMAGE="$local_alpine"
@@ -67,79 +68,81 @@ else
     fi
 fi
 
-# 【核心修正】将列参数由 p(PID) 改为 e(Project Name)，彻底拉回正确轨道
-RUNNING_INSTANCES=$(incus list --all-projects -f csv -c n,e,s < /dev/null 2>/dev/null | grep -i ',RUNNING$' | awk -F, '{print $1","$2}')
-
-if [ -z "$RUNNING_INSTANCES" ]; then
-    echo -e "${GREEN}安全：当前宿主机上没有正在运行的容器，无需清查。${NC}"
-    exit 0
+# 【核心重构】首先获取系统内全量的真实项目名称列表
+PROJECT_LIST=$(incus project list -f csv -c n < /dev/null 2>/dev/null)
+if [ -z "$PROJECT_LIST" ]; then
+    PROJECT_LIST="default"
 fi
 
-TOTAL=$(echo "$RUNNING_INSTANCES" | grep -c "^")
-echo -e "正在全量跨项目深度盘查 ${YELLOW}${TOTAL}${NC} 个活跃容器..."
+echo -e "正在全量跨项目深度盘查活跃容器..."
 echo "------------------------------------------------"
 
 COUNT=0
 INFECTED_COUNT=0
 
-# 使用安全的文件流读取，配合强力防吞参数，实现精准遍历
-while IFS= read -r instance; do
-    [ -z "$instance" ] && continue
-    COUNT=$((COUNT + 1))
+# 第一层循环：遍历所有合法的项目
+for project in $PROJECT_LIST; do
+    [ -z "$project" ] && continue
     
-    container=$(echo "$instance" | awk -F, '{print $1}')
-    project=$(echo "$instance" | awk -F, '{print $2}')
+    # 第二层循环：获取该项目下所有真正运行中的容器名
+    RUNNING_CONTAINERS=$(incus list --project "$project" -f csv -c ns < /dev/null 2>/dev/null | grep -i ',RUNNING$' | awk -F, '{print $1}')
     
-    printf "[%d/%d] 正在盘查容器: %-26s [项目: %-8s] -> " "$COUNT" "$TOTAL" "$container" "$project"
-
-    HIT_REASON=$(incus exec --project "$project" "$container" -- sh -c '
-        KEYWORDS="$1"
-        MAX_TCP="$2"
-        MAX_UDP="$3"
-        MAX_RAW="$4"
-        MAX_SYN="$5"
-        SELF=$$
+    for container in $RUNNING_CONTAINERS; do
+        [ -z "$container" ] && continue
+        COUNT=$((COUNT + 1))
         
-        [ -f /proc/net/tcp ] || exit 0
-        
-        TCP_FILE=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null)
-        
-        TCP_COUNT=$(echo "$TCP_FILE" | grep -c "^")
-        UDP_COUNT=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | grep -c "^")
-        RAW_COUNT=$(cat /proc/net/raw /proc/net/raw6 2>/dev/null | grep -c "^")
-        SYN_COUNT=$(echo "$TCP_FILE" | awk '\''{print $4}'\'' | grep -c "02")
+        # 此时打印出来的项目名绝对是合法的文本（如 default），不再是乱七八糟的 PID
+        printf "[%d] 正在盘查容器: %-26s [项目: %-8s] -> " "$COUNT" "$container" "$project"
 
-        if [ "$SYN_COUNT" -gt "$MAX_SYN" ]; then echo "异常开包扫描 ($SYN_COUNT)"; exit 0; fi
-        if [ "$TCP_COUNT" -gt "$MAX_TCP" ]; then echo "TCP高并发 ($TCP_COUNT)"; exit 0; fi
-        if [ "$UDP_COUNT" -gt "$MAX_UDP" ]; then echo "UDP洪水 ($UDP_COUNT)"; exit 0; fi
-        if [ "$RAW_COUNT" -gt "$MAX_RAW" ]; then echo "伪造Raw协议 ($RAW_COUNT)"; exit 0; fi
+        HIT_REASON=$(incus exec --project "$project" "$container" -- sh -c '
+            KEYWORDS="$1"
+            MAX_TCP="$2"
+            MAX_UDP="$3"
+            MAX_RAW="$4"
+            MAX_SYN="$5"
+            SELF=$$
+            
+            [ -f /proc/net/tcp ] || exit 0
+            
+            TCP_FILE=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null)
+            
+            TCP_COUNT=$(echo "$TCP_FILE" | grep -c "^")
+            UDP_COUNT=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | grep -c "^")
+            RAW_COUNT=$(cat /proc/net/raw /proc/net/raw6 2>/dev/null | grep -c "^")
+            SYN_COUNT=$(echo "$TCP_FILE" | awk '\''{print $4}'\'' | grep -c "02")
 
-        for f in /proc/[0-9]*/cmdline; do
-            [ -f "$f" ] || continue
-            p="${f%/cmdline}"; p="${p#/proc/}"
-            [ "$p" = "$SELF" ] && continue
-            MATCHED=$(tr "\0" "\n" < "$f" 2>/dev/null | grep -oiE "$KEYWORDS" | head -n1)
-            if [ -n "$MATCHED" ]; then echo "违规进程: $MATCHED"; exit 0; fi
-        done
-        
-        for p in /opt/nezha/agent/nezha-agent /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
-            if [ -e "$p" ]; then echo "残留文件: $p"; exit 0; fi
-        done
-    ' sh "$SCAN_KEYWORDS" "$MAX_TCP_CONN" "$MAX_UDP_CONN" "$MAX_RAW_CONN" "$MAX_SYN_SENT" < /dev/null 2>/dev/null)
+            if [ "$SYN_COUNT" -gt "$MAX_SYN" ]; then echo "异常开包扫描 ($SYN_COUNT)"; exit 0; fi
+            if [ "$TCP_COUNT" -gt "$MAX_TCP" ]; then echo "TCP高并发 ($TCP_COUNT)"; exit 0; fi
+            if [ "$UDP_COUNT" -gt "$MAX_UDP" ]; then echo "UDP洪水 ($UDP_COUNT)"; exit 0; fi
+            if [ "$RAW_COUNT" -gt "$MAX_RAW" ]; then echo "伪造Raw协议 ($RAW_COUNT)"; exit 0; fi
 
-    if [ -n "$HIT_REASON" ]; then
-        INFECTED_COUNT=$((INFECTED_COUNT + 1))
-        echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
-        echo -e "${YELLOW}   ↳ 🔄 发现违规，正在强制直接智能重装...${NC}"
-        if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
-            echo -e "${GREEN}   ↳ ✅ 重装成功！容器已重置净化。${NC}"
+            for f in /proc/[0-9]*/cmdline; do
+                [ -f "$f" ] || continue
+                p="${f%/cmdline}"; p="${p#/proc/}"
+                [ "$p" = "$SELF" ] && continue
+                MATCHED=$(tr "\0" "\n" < "$f" 2>/dev/null | grep -oiE "$KEYWORDS" | head -n1)
+                if [ -n "$MATCHED" ]; then echo "违规进程: $MATCHED"; exit 0; fi
+            done
+            
+            for p in /opt/nezha/agent/nezha-agent /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
+                if [ -e "$p" ]; then echo "残留文件: $p"; exit 0; fi
+            done
+        ' sh "$SCAN_KEYWORDS" "$MAX_TCP_CONN" "$MAX_UDP_CONN" "$MAX_RAW_CONN" "$MAX_SYN_SENT" < /dev/null 2>/dev/null)
+
+        if [ -n "$HIT_REASON" ]; then
+            INFECTED_COUNT=$((INFECTED_COUNT + 1))
+            echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
+            echo -e "${YELLOW}   ↳ 🔄 发现违规，正在强制直接智能重装...${NC}"
+            if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
+                echo -e "${GREEN}   ↳ ✅ 重装成功！容器已重置净化。${NC}"
+            else
+                echo -e "${RED}   ↳ ❌ 重装失败，请手动介入检查。${NC}"
+            fi
         else
-            echo -e "${RED}   ↳ ❌ 重装失败，请手动介入检查。${NC}"
+            echo -e "${GREEN}[✔ 正常]${NC}"
         fi
-    else
-        echo -e "${GREEN}[✔ 正常]${NC}"
-    fi
-done < <(echo "$RUNNING_INSTANCES")
+    done
+done
 
 echo "------------------------------------------------"
 echo -e "${CYAN}=======================================${NC}"
