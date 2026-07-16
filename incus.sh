@@ -205,20 +205,7 @@ iptables -I FORWARD 1 -o incusbr0 -j ACCEPT
 iptables -I FORWARD 1 -i incusbr0 -j ACCEPT
 iptables -I FORWARD 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# 2. 注入 IP 放行白名单
-iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
-iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
-iptables -I FORWARD 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
-iptables -I FORWARD 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
-
-# 3. 注入宿主 DNS 域名放行白名单
-for domain in "${WHITELIST_DOMAINS[@]}"; do
-    clean_domain=$(echo "$domain" | sed 's/^\*\.//')
-    iptables -I OUTPUT 1 -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
-    iptables -I OUTPUT 1 -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
-done
-
-# 4. 注入中国 IP 强效单向阻断 (🔥 终极加固：仅阻断新建 TCP-SYN 握手，回包绝不误杀)
+# 2. 注入中国 IP 强效单向阻断 (🔥 核心修复：必须先写拦截，让它被后面的白名单压住)
 iptables -I OUTPUT 1 -p tcp -m set --match-set cnip dst --syn -j REJECT
 iptables -I OUTPUT 1 -p udp -m set --match-set cnip dst -j REJECT
 iptables -I OUTPUT 1 -p icmp -m set --match-set cnip dst -j REJECT
@@ -227,7 +214,20 @@ iptables -I FORWARD 1 -i incusbr0 -p tcp -m set --match-set cnip dst --syn -j RE
 iptables -I FORWARD 1 -i incusbr0 -p udp -m set --match-set cnip dst -j REJECT
 iptables -I FORWARD 1 -i incusbr0 -p icmp -m set --match-set cnip dst -j REJECT
 
-# 5. 注入大小写 DNS 终极拦截线
+# 3. 注入 IP 放行白名单 (🔥 核心修复：写在拦截后面，压在拦截上方，优先级更高)
+iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
+iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
+iptables -I FORWARD 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
+iptables -I FORWARD 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
+
+# 4. 注入宿主 DNS 域名放行白名单 (继续压在上面)
+for domain in "${WHITELIST_DOMAINS[@]}"; do
+    clean_domain=$(echo "$domain" | sed 's/^\*\.//')
+    iptables -I OUTPUT 1 -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
+    iptables -I OUTPUT 1 -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
+done
+
+# 5. 注入大小写 DNS 终极拦截线 (压在最顶层)
 iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
 iptables -I OUTPUT 1 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
 iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
