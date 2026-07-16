@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.16.2 终极生产金标版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.16.2 终极生产金标版 - BugFix)
 # =======================================================================
 
 set -e
@@ -195,22 +195,22 @@ iptables -I FORWARD 1 -o incusbr0 -j ACCEPT
 iptables -I FORWARD 1 -i incusbr0 -j ACCEPT
 iptables -I FORWARD 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# 第四顺位：下发底层业务 IP 白名单放行（骑在通用安全垫头上）
+# 第三顺位：下发中国 IP 强效拦截（先注入，作为拦截底线沉在白名单下方）
+iptables -I OUTPUT 1 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
+iptables -I FORWARD 1 -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
+
+# 第四顺位：下发底层业务 IP 白名单放行（后注入，骑在中国 IP 拦截的头上）
 iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
 iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
 iptables -I FORWARD 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
 iptables -I FORWARD 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
 
-# 宿主自身域名放行白名单
+# 宿主自身域名放行白名单（同样压在拦截规则头上）
 for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     iptables -I OUTPUT 1 -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
     iptables -I OUTPUT 1 -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
 done
-
-# 第三顺位：下发中国 IP 强效拦截（压在白名单头部，无条件拦截非白名单的国内出站）
-iptables -I OUTPUT 1 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
-iptables -I FORWARD 1 -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
 
 # 第二顺位（绝对霸权）：下发大小写 DNS 域名终极斩杀线（压在最顶部，白名单完全无法干预）
 iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
