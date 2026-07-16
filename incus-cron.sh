@@ -1,23 +1,22 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.11 完美对齐完全体版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.16.2 终极生产金标版)
 # =======================================================================
 
-# 开启顶级严格错误追踪与管道熔断，全局死锁保护
 set -e
 set -o pipefail
 
 # =======================================================================
-# 🌟 全局自定义双重白名单配置 (在此修改，自动同步至所有自愈组件)
+# 🌟 全局自定义双重白名单配置
 # =======================================================================
 WHITELIST_DOMAINS=(
     "zstaticcdn.com"
-    "*.zstaticcdn.com"  # Zoom 视频会议官方静态 CDN 资源放行
+    "*.zstaticcdn.com"
 )
 
 WHITELIST_IPS=(
     "1.1.1.1"
-    "8.8.8.8"           # 常用上游纯净公共 DNS 放行
+    "8.8.8.8"
 )
 # =======================================================================
 
@@ -30,141 +29,118 @@ echo "=================================================="
 echo "🛡️  第一阶段：配置单向阻断防火墙与宿主 DNS 劫持"
 echo "=================================================="
 
-# 🔥【核心保障】：临时彻底释放所有可能残存的旧版 NAT 劫持与 FILTER 阻断，防止部署期死锁
-echo "🧹 正在释放可能残存的旧版劫持与阻断规则，确保部署通道 100% 畅通..."
+echo "🧹 正在释放可能残存的旧版劫持与阻断规则..."
 while iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
 while iptables -t nat -D OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
 while iptables -D OUTPUT -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 rm -f /etc/resolv.conf
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 
-# 1. 变量化自适应解析，彻底解决 Ubuntu/Debian 模糊血统误判 Bug
-echo "📦 正在全盘扫描并自适应修正系统 APT 软件源..."
 OS_TYPE="ubuntu"
 if [ -f /etc/os-release ]; then
     . /etc/os-release
-    if [ "$ID" = "debian" ]; then
-        OS_TYPE="debian"
-    fi
+    [ "$ID" = "debian" ] && OS_TYPE="debian"
 fi
-
 ARCH=$(dpkg --print-architecture)
 
 if [ "$OS_TYPE" = "debian" ]; then
-    echo "ℹ️  检测到纯正 Debian 系统，官方源锁向 deb.debian.org"
     OFFICIAL_URL="http://deb.debian.org/debian/"
     MATCH_REGEX="s#https?://[^/]*(aliyun|tencent|tsinghua|ustc|huaweicloud)[^/]*/debian/?#${OFFICIAL_URL}#g"
 else
-    echo "ℹ️  检测到纯正 Ubuntu 系统..."
     if [ "$ARCH" = "arm64" ]; then
-        echo "ℹ️  检测到 ARM64 架构，官方源锁向 ports.ubuntu.com"
         OFFICIAL_URL="http://ports.ubuntu.com/ubuntu-ports/"
     else
-        echo "ℹ️  检测到 x86_64 架构，官方源锁向 archive.ubuntu.com/ubuntu/"
         OFFICIAL_URL="http://archive.ubuntu.com/ubuntu/"
     fi
     MATCH_REGEX="s#https?://[^/]*(aliyun|tencent|tsinghua|ustc|huaweicloud)[^/]*/(ubuntu-ports|ubuntu)/?#${OFFICIAL_URL}#g"
 fi
 
-# 深度清洗：全局扫描子目录，只有当文件中确实包含国内镜像源时才触发原子替换
 find /etc/apt/ -name "*.list" -type f | while read -r list_file; do
     if grep -qE "aliyun|tencent|tsinghua|ustc|huaweicloud" "$list_file"; then
-        echo "⚠️  正在安全清洗国内镜像源文件: $list_file"
         sed -i -E "${MATCH_REGEX}" "$list_file"
     fi
 done
 
-# 2. 提前创建 dnsmasq 53535 物理隔离配置，彻底消除安装阶段的 Socket 冲突
-echo "⚙️  正在预配置 dnsmasq 隔离解析沙箱 (监听 53535)..."
 mkdir -p /etc/dnsmasq.d
-cat << 'DNS' > /etc/dnsmasq.d/dynamic_whitelist.conf
-# 🌟 绝对安全：避开 53 端口，强绑定本地高端口 53535，绝不引发 Socket 冲突
-port=53535
-listen-address=127.0.0.1
-bind-interfaces
+echo "conf-dir=/etc/dnsmasq.d/,*.conf" > /etc/dnsmasq.conf
 
-# 🌟 核心拦截：当宿主机解析 zstaticcdn.com 及其子域名时，自动将 IP 动态写入 whitelist_ips_dynamic
-ipset=/zstaticcdn.com/whitelist_ips_dynamic
+HOST_DNS_CONF="port=53535\nlisten-address=127.0.0.1\nbind-interfaces\n"
+for domain in "${WHITELIST_DOMAINS[@]}"; do
+    clean_domain=$(echo "$domain" | sed 's/^\*\.//')
+    HOST_DNS_CONF="${HOST_DNS_CONF}ipset=/${clean_domain}/whitelist_ips_dynamic\n"
+done
+HOST_DNS_CONF="${HOST_DNS_CONF}server=8.8.8.8\nserver=1.1.1.1\n"
+printf "$HOST_DNS_CONF" > /etc/dnsmasq.d/dynamic_whitelist.conf
 
-# 干净的上游 DNS 转发源
-server=8.8.8.8
-server=1.1.1.1
-DNS
-
-# 3. 安装内核防火墙组件、DNS解析组件与计划任务组件
-echo "📥 正在同步并安装 ipset、curl、iptables、dnsmasq、dnsutils 及 cron..."
 apt-get update -y
 apt-get install ipset curl iptables dnsmasq dnsutils cron -y
 systemctl enable --now cron
-
-# 重启或启动 dnsmasq 服务
 systemctl restart dnsmasq || systemctl start dnsmasq
 
-# 4. 改用 ipverse 官方高频维护的国内 IP 镜像库
-echo "🌐 正在下载并生成最新中国大陆 IP 基础库 (ipset)..."
 mkdir -p "$CONF_DIR"
 curl -sLf https://cdn.jsdelivr.net/gh/ipverse/country-ip-blocks@master/country/cn/ipv4-aggregated.txt | tr -d '\r' | awk '/^[0-9]/ {print "add cnip " $1}' > "$CONF_DIR/cnip.list"
 
-# 5. 生成统一白名单配置文件
-echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.11 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
-
 WHITELIST_IPS=(
 $(printf "    \"%s\"\n" "${WHITELIST_IPS[@]}")
 )
 EOF
 
-# 6. 🧹【物理清理残留】：将容器侧的动态白名单残留彻底抹除
 if command -v incus &>/dev/null; then
-    echo "🧹 正在清理 Incus 网桥残留的 raw.dnsmasq 规则..."
-    incus network unset incusbr0 raw.dnsmasq || true
+    incus network set incusbr0 raw.dnsmasq= >/dev/null 2>&1 || true
+    RAW_DNSMASQ_CONF=""
+    for domain in "${WHITELIST_DOMAINS[@]}"; do
+        clean_domain=$(echo "$domain" | sed 's/^\*\.//')
+        RAW_DNSMASQ_CONF="${RAW_DNSMASQ_CONF}ipset=/${clean_domain}/whitelist_ips_dynamic\n"
+    done
+    printf "$RAW_DNSMASQ_CONF" | incus network set incusbr0 raw.dnsmasq=- || true
 fi
 
-# 7. 生成独立的本地防火墙原子初始化脚本 (已彻底修复 31 行 Shebang 乱码 Typo)
-echo "📝 正在构建本地独立防火墙自愈脚本..."
 cat << 'INIT' > "$INIT_SCRIPT"
 #!/bin/bash
 CONF_DIR="/etc/iptables-custom"
 
-# 载入统一白名单配置
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+
 if [ -f "$CONF_DIR/whitelist.conf" ]; then
     source "$CONF_DIR/whitelist.conf"
 fi
 
-# 在内存中创建或清空集合
 ipset create cnip hash:net 2>/dev/null || ipset flush cnip
 if [ -f "$CONF_DIR/cnip.list" ]; then
     ipset restore < "$CONF_DIR/cnip.list"
 fi
 
-# 创建 IP 静态与动态白名单集合
 ipset create whitelist_ips_static hash:net 2>/dev/null || ipset flush whitelist_ips_static
-# 动态集合绝不 flush，完美保留已建立连接 the CDN 动态 IP
 ipset create whitelist_ips_dynamic hash:net 2>/dev/null || true
 
-# 自动解析白名单域名的当前 IP 并追加进静态白名单
+NEW_IPS=""
 for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     ips=$(dig +short "$clean_domain" 2>/dev/null | grep -E '^[0-9.]+$') || true
-    for ip in $ips; do
-        ipset add whitelist_ips_static "$ip" 2>/dev/null || true
-    done
+    if [ -n "$ips" ]; then
+        NEW_IPS="${NEW_IPS}\n${ips}"
+    fi
 done
 
-# 追加手动写入的白名单静态 IP
+if echo -e "$NEW_IPS" | grep -qE '^[0-9.]+$'; then
+    echo -e "$NEW_IPS" | grep -E '^[0-9.]+$' | sort -u > "$CONF_DIR/static_ips.cache"
+fi
+
+if [ -f "$CONF_DIR/static_ips.cache" ]; then
+    while read -r ip; do
+        [ -n "$ip" ] && ipset add whitelist_ips_static "$ip" 2>/dev/null || true
+    done < "$CONF_DIR/static_ips.cache"
+fi
+
 for ip in "${WHITELIST_IPS[@]}"; do
     ipset add whitelist_ips_static "$ip" 2>/dev/null || true
 done
 
-
-# =======================================================================
-# 🔥【NAT 劫持与死锁防护】：物理隔离劫持所有本地 DNS 流量并扭送至 53535
-# =======================================================================
-# 强力排空 nat 表中的旧重定向规则，防止堆叠垃圾
+# === NAT 劫持防堆叠 ===
 while iptables -t nat -D OUTPUT -p udp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT 2>/dev/null; do :; done
 while iptables -t nat -D OUTPUT -p tcp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT 2>/dev/null; do :; done
 while iptables -t nat -D OUTPUT -p udp --dport 53 -m owner --uid-owner nobody -j ACCEPT 2>/dev/null; do :; done
@@ -172,74 +148,95 @@ while iptables -t nat -D OUTPUT -p tcp --dport 53 -m owner --uid-owner nobody -j
 while iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
 while iptables -t nat -D OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53535 2>/dev/null; do :; done
 
-# 🧱【无损倒序堆叠 nat 规则】：后写的最先匹配
-# REDIRECT 规则在最底层
 iptables -t nat -I OUTPUT 1 -p udp --dport 53 -j REDIRECT --to-ports 53535
 iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -j REDIRECT --to-ports 53535
-
-# Loop 防护规则骑在 REDIRECT 规则头上，确保 dnsmasq 自身的上游查询放行，不发生死锁
 iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -m owner --uid-owner nobody -j ACCEPT
 iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner nobody -j ACCEPT
 iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
 iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
 
-
-# =======================================================================
-# 🧱【FILTER 规则】：清洗并下发包过滤与阻断逻辑
-# =======================================================================
-# 强力排空 filter 表中的旧阻断与斩杀规则
+# === FILTER 链强力全量大清扫 ===
+while iptables -D INPUT -i incusbr0 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D INPUT -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D INPUT -i incusbr0 -p udp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D INPUT -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
-while iptables -D FORWARD -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
-while iptables -D FORWARD -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
-
-# 清理旧 of 白名单放行规则
+while iptables -D OUTPUT -p udp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D OUTPUT -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -p udp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -m set --match-set whitelist_ips_static dst -j ACCEPT 2>/dev/null; do :; done
 while iptables -D FORWARD -m set --match-set whitelist_ips_static dst -j ACCEPT 2>/dev/null; do :; done
 while iptables -D OUTPUT -m set --match-set whitelist_ips_dynamic dst -j ACCEPT 2>/dev/null; do :; done
 while iptables -D FORWARD -m set --match-set whitelist_ips_dynamic dst -j ACCEPT 2>/dev/null; do :; done
 
+# 🧹【强效补齐】：全量排空旧的通用放行安全垫规则，防止Crontab堆叠
+while iptables -D FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -j ACCEPT 2>/dev/null; do :; done
+while iptables -D FORWARD -o incusbr0 -j ACCEPT 2>/dev/null; do :; done
+
 for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     while iptables -D OUTPUT -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT 2>/dev/null; do :; done
     while iptables -D OUTPUT -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT 2>/dev/null; do :; done
-    while iptables -D FORWARD -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT 2>/dev/null; do :; done
-    while iptables -D FORWARD -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT 2>/dev/null; do :; done
 done
 
-# 🧱【第三优先级：IP 阻断与 DNS 斩杀】
-iptables -I OUTPUT 1 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
-iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
-iptables -I OUTPUT 1 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+# =======================================================================
+# 🧱【精密正序堆叠策略】：利用插入特性，越安全放底层的规则必须最先注入
+# =======================================================================
 
-# 🧱 容器侧一刀切严格闭锁
-iptables -I FORWARD 1 -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
-iptables -I FORWARD 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
-iptables -I FORWARD 1 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+# 🔥【重大挽救】：建立基础通用转发与回包大门（最先插入，沉到本套防御规则的最底部作为安全垫，防死锁断网）
+iptables -I FORWARD 1 -o incusbr0 -j ACCEPT
+iptables -I FORWARD 1 -i incusbr0 -j ACCEPT
+iptables -I FORWARD 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# 🧱【第二优先级：DNS 放行白名单】 (仅限宿主机自身 OUTPUT 链)
+# 第四顺位：下发底层业务 IP 白名单放行（骑在通用安全垫头上）
+iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
+iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
+iptables -I FORWARD 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
+iptables -I FORWARD 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
+
+# 宿主自身域名放行白名单
 for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     iptables -I OUTPUT 1 -p udp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
     iptables -I OUTPUT 1 -p tcp --dport 53 -m string --string "$clean_domain" --algo bm -j ACCEPT
 done
 
-# 🧱【第一优先级：IP 放行白名单】 (最高顺位，仅限宿主机自身 OUTPUT 链，绝对置顶)
-iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
-iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
+# 第三顺位：下发中国 IP 强效拦截（压在白名单头部，无条件拦截非白名单的国内出站）
+iptables -I OUTPUT 1 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
+iptables -I FORWARD 1 -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
+
+# 第二顺位（绝对霸权）：下发大小写 DNS 域名终极斩杀线（压在最顶部，白名单完全无法干预）
+iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+iptables -I OUTPUT 1 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+iptables -I OUTPUT 1 -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
+iptables -I OUTPUT 1 -p udp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
+
+iptables -I FORWARD 1 -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+iptables -I FORWARD 1 -i incusbr0 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+iptables -I FORWARD 1 -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
+iptables -I FORWARD 1 -i incusbr0 -p udp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
+
+# 第一顺位：针对容器直接访问宿主网桥本地 DNS 的包，在 INPUT 链最顶部拦截斩杀！
+iptables -I INPUT 1 -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+iptables -I INPUT 1 -i incusbr0 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT
+iptables -I INPUT 1 -i incusbr0 -p tcp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
+iptables -I INPUT 1 -i incusbr0 -p udp --dport 53 -m string --hex-string "|02434e00|" --algo bm -j REJECT
 INIT
 
 chmod +x "$INIT_SCRIPT"
 
-# 8. 构建 systemd 服务实现开机自愈托管
-echo "⚙️ 正在构建守护服务，彻底锁定开机加载顺序..."
 cat << 'SERVICE' > /etc/systemd/system/custom-firewall.service
 [Unit]
 Description=Custom Outbound Firewall for Host and Incus Containers
-After=network.target
-Before=network-online.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
@@ -252,63 +249,43 @@ SERVICE
 
 systemctl daemon-reload
 systemctl enable custom-firewall.service
-
-# 强行打穿 Oneshot 缓存重新加载自愈脚本并立即在 Shell 生效
 systemctl restart custom-firewall.service
 /etc/iptables-custom/init.sh
-
 
 echo -e "\n=================================================="
 echo "⏰ 第二阶段：配置高频安全检测定时任务 (Crontab)"
 echo "=================================================="
 
-echo "📦 正在配置定时任务调度外壳..."
-
-# 写入后台巡检调度脚本 (【重大重构】：已完美对齐 v4.4 容器清洗重装特征码)
 cat << 'EOF' > "$CRON_SCRIPT"
 #!/bin/bash
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 
-# 1. 5分钟定时强制触发防火墙自愈与规则置顶
 if [ -x /etc/iptables-custom/init.sh ]; then
     /etc/iptables-custom/init.sh >/dev/null 2>&1 || true
 fi
 
-# 2. 执行 Incus 容器特征扫描与重装巡检
 LOG_FILE="/var/log/incus_clean.log"
 TMP_OUT=$(mktemp)
 CLEAN_OUT=$(mktemp)
 trap 'rm -f "$TMP_OUT" "$CLEAN_OUT"' EXIT
 
-# 拉取远程最新脚本执行，将混合日志存入临时文件
 timeout 10m bash -c 'curl -sLf -H "Cache-Control: no-cache" -H "Pragma: no-cache" "https://raw.githubusercontent.com/2113087020/incus/main/incus.sh?v=$(date +%s)" | bash' > "$TMP_OUT" 2>&1
-
-# 【核心加固】：先强制剥离所有不可见的终端 ANSI 颜色控制字符，防止干扰关键字拦截
 sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' "$TMP_OUT" | sed -E 's/\r/\n/g' > "$CLEAN_OUT"
 
-# 【核心对齐】：精准拦截 v4.4 版本的重装报警关键字 (违规 | 强制直接智能重装 | 重装成功)
 if grep -qE "违规:|发现违规|重装成功" "$CLEAN_OUT"; then
-    # 日志文件滚动限额裁剪 (超过 100KB 自动保留末尾 300 行，防爆硬盘)
     if [ -f "$LOG_FILE" ] && [ $(stat -c%s "$LOG_FILE") -gt 102400 ]; then
         tail -n 300 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
         echo "--- $(date '+%Y-%m-%d %H:%M:%S') 日志超 100KB 已自动裁剪矩阵 ---" >> "$LOG_FILE"
     fi
-    
-    # 纯净追加本次重装净化核心事件日志
     echo "=== [$(date '+%Y-%m-%d %H:%M:%S')] 🚨 Incus 容器自动重装自愈事件报告 ===" >> "$LOG_FILE"
     grep -E "违规:|发现违规|正在强制|重装成功|重装失败" "$CLEAN_OUT" >> "$LOG_FILE"
     echo "" >> "$LOG_FILE"
 fi
 EOF
 
-echo "🔐 赋予外壳脚本执行权限..."
 chmod +x "$CRON_SCRIPT"
-
-echo "⏰ 正在配置每 5 分钟高频安全检测 (Crontab)..."
 OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.11 宿主专属自愈完全体版】部署成功！"
-echo "ℹ️  审计规则：日志模块已完美适配 v4.4，仅在容器触发违规且成功执行重装时，才会向 $LOG_FILE 追加记录。"
-EOF
+echo "✅ 全套一体化安全配置【v5.16.2 终极生产金标版】完美通车！"
