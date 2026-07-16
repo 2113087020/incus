@@ -1,5 +1,5 @@
 #!/bin/bash
-# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.4 生产环境终极封板版)
+# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.7 生产环境完美完全体版)
 
 # ==================== 🔍 自定义监控黑名单 ====================
 SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|ew|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
@@ -53,6 +53,14 @@ if incus network show incusbr0 < /dev/null >/dev/null 2>&1; then
     else
         echo -e "${GREEN}   [✔] 泛端口扫描拦截规则已牢固绑定在网桥 incusbr0。${NC}"
     fi
+
+    # =======================================================================
+    # 🔑【生产核心加固】：强制将网桥的未匹配常规上网流量全部默认放行 (ALLOW)
+    # 彻底激活黑名单过滤模式，绝对封死全网齐刷刷断网的底层机制漏洞
+    # =======================================================================
+    incus network set incusbr0 security.acls.default.egress.action=allow < /dev/null >/dev/null 2>&1
+    incus network set incusbr0 security.acls.default.ingress.action=allow < /dev/null >/dev/null 2>&1
+    echo -e "${GREEN}   [✔] 默认上网规则（Default Allow）已成功焊死，网络运行无阻。${NC}"
 else
     echo -e "${RED}   [✖] 严重警告：未找到默认网桥 incusbr0，跳过网桥绑定，请手动核对网桥名称。${NC}"
 fi
@@ -146,7 +154,7 @@ for project in $PROJECT_LIST; do
             INFECTED_COUNT=$((INFECTED_COUNT + 1))
             echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
             echo -e "${YELLOW}   ↳ 🔄 发现违规，正在强制直接智能重装...${NC}"
-            # 严格遵循全局全局参数前置原则进行强制抹除性重装
+            # 严格遵循参数前置原则进行强制抹除性重装
             if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
                 echo -e "${GREEN}   ↳ ✅ 重装成功！容器已重置净化。${NC}"
             else
