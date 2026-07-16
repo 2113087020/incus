@@ -1,7 +1,6 @@
 #!/bin/bash
-# incus 容器网络防护与违规进程智能检测一体化脚本 (v3.9 纯净重装无快照版)
+# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.1 滚动日志明文版)
 
-# ==================== 🔍 自定义监控黑名单 ====================
 SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|ew|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
 MAX_TCP_CONN=500
 MAX_UDP_CONN=500
@@ -56,6 +55,7 @@ echo -e "\n${CYAN}=======================================${NC}"
 echo -e "${CYAN} 🚀 阶段二: 容器内部违规进程与 DDoS 行为清查${NC}"
 echo -e "${CYAN}=======================================${NC}\n"
 
+# 智能匹配重装镜像
 local_alpine=$(incus image list local: -f csv -c fd < /dev/null 2>/dev/null | grep -i "alpine" | head -n1 | awk -F, '{print $1}')
 if [ -n "$local_alpine" ]; then
     TARGET_IMAGE="$local_alpine"
@@ -68,10 +68,7 @@ else
     fi
 fi
 
-echo -e "🎯 监控指标: 包含 $(echo "$SCAN_KEYWORDS" | tr '|' '\n' | wc -l) 个特征关键词"
-echo -e "🔧 重装预设: 智能匹配重装镜像 -> ${GREEN}${TARGET_IMAGE}${NC}"
-echo "------------------------------------------------"
-
+# 修正部分低版本快捷键解析，改用标准全称获取实例列表
 RUNNING_INSTANCES=$(incus list --all-projects -f csv -c n,p,s < /dev/null 2>/dev/null | grep -i ',RUNNING$' | awk -F, '{print $1","$2}')
 
 if [ -z "$RUNNING_INSTANCES" ]; then
@@ -80,21 +77,24 @@ if [ -z "$RUNNING_INSTANCES" ]; then
 fi
 
 TOTAL=$(echo "$RUNNING_INSTANCES" | grep -c "^")
-echo -e "正在全量跨项目深度盘查 ${YELLOW}${TOTAL}${NC} 个活跃容器...\n"
+echo -e "正在全量跨项目深度盘查 ${YELLOW}${TOTAL}${NC} 个活跃容器..."
+echo "------------------------------------------------"
 
 COUNT=0
 INFECTED_COUNT=0
 
-while IFS= read -r instance; do
+for instance in $RUNNING_INSTANCES; do
     [ -z "$instance" ] && continue
     COUNT=$((COUNT + 1))
     
     container=$(echo "$instance" | awk -F, '{print $1}')
     project=$(echo "$instance" | awk -F, '{print $2}')
     
-    printf "\r[%d/%d] 正在深度透视: %s [%s]" "$COUNT" "$TOTAL" "$container" "$project"
+    # 改为明文换行打印，拒绝回首覆盖，确保所见即所得
+    printf "[%d/%d] 正在盘查容器: %-26s [项目: %-8s] -> " "$COUNT" "$TOTAL" "$container" "$project"
 
-    HIT_REASON=$(incus exec "$container" --project "$project" -- sh -c '
+    # 【核心修复】将 --project 参数严格修正移动到 exec 子命令的最前面！
+    HIT_REASON=$(incus exec --project "$project" "$container" -- sh -c '
         KEYWORDS="$1"
         MAX_TCP="$2"
         MAX_UDP="$3"
@@ -111,44 +111,46 @@ while IFS= read -r instance; do
         RAW_COUNT=$(cat /proc/net/raw /proc/net/raw6 2>/dev/null | grep -c "^")
         SYN_COUNT=$(echo "$TCP_FILE" | awk '\''{print $4}'\'' | grep -c "02")
 
-        if [ "$SYN_COUNT" -gt "$MAX_SYN" ]; then echo "泛端口扫描行为: 异常 SYN_SENT ($SYN_COUNT)"; exit 0; fi
-        if [ "$TCP_COUNT" -gt "$MAX_TCP" ]; then echo "DDoS预警: 高频 TCP 并发 ($TCP_COUNT)"; exit 0; fi
-        if [ "$UDP_COUNT" -gt "$MAX_UDP" ]; then echo "DDoS预警: 高频 UDP 洪水 ($UDP_COUNT)"; exit 0; fi
-        if [ "$RAW_COUNT" -gt "$MAX_RAW" ]; then echo "底层协议伪造: Raw Socket ($RAW_COUNT)"; exit 0; fi
+        if [ "$SYN_COUNT" -gt "$MAX_SYN" ]; then echo "异常开包扫描 ($SYN_COUNT)"; exit 0; fi
+        if [ "$TCP_COUNT" -gt "$MAX_TCP" ]; then echo "TCP高并发 ($TCP_COUNT)"; exit 0; fi
+        if [ "$UDP_COUNT" -gt "$MAX_UDP" ]; then echo "UDP洪水 ($UDP_COUNT)"; exit 0; fi
+        if [ "$RAW_COUNT" -gt "$MAX_RAW" ]; then echo "伪造Raw协议 ($RAW_COUNT)"; exit 0; fi
 
         for f in /proc/[0-9]*/cmdline; do
             [ -f "$f" ] || continue
             p="${f%/cmdline}"; p="${p#/proc/}"
             [ "$p" = "$SELF" ] && continue
             MATCHED=$(tr "\0" "\n" < "$f" 2>/dev/null | grep -oiE "$KEYWORDS" | head -n1)
-            if [ -n "$MATCHED" ]; then echo "命中违规违禁进程: $MATCHED"; exit 0; fi
+            if [ -n "$MATCHED" ]; then echo "违规进程: $MATCHED"; exit 0; fi
         done
         
         for p in /opt/nezha/agent/nezha-agent /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
-            if [ -e "$p" ]; then echo "发现特征文件: $p"; exit 0; fi
+            if [ -e "$p" ]; then echo "残留文件: $p"; exit 0; fi
         done
-    ' sh "$SCAN_KEYWORDS" "$MAX_TCP_CONN" "$MAX_UDP_CONN" "$MAX_RAW_CONN" "$MAX_SYN_SENT" 2>/dev/null)
+    ' sh "$SCAN_KEYWORDS" "$MAX_TCP_CONN" "$MAX_UDP_CONN" "$MAX_RAW_CONN" "$MAX_SYN_SENT" < /dev/null 2>/dev/null)
 
     if [ -n "$HIT_REASON" ]; then
         INFECTED_COUNT=$((INFECTED_COUNT + 1))
-        printf "\r${RED}[!] 警告: 容器 [%s] (项目:%s) 触发违规 -> 【%s】${NC}\n" "$container" "$project" "$HIT_REASON"
-        
-        echo -e "${YELLOW}   ↳ 🔄 发现违规，正在强制直接智能重装...${NC}"
-        if incus rebuild "$TARGET_IMAGE" "$container" --project "$project" --force < /dev/null >/dev/null 2>&1; then
-            echo -e "${GREEN}   ↳ ✅ 重装成功！容器已重置净化。${NC}\n"
+        echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
+        echo -e "${YELLOW}   ↳ 🔄 正在强制直接智能重装...${NC}"
+        # 【核心修复】同样修正 rebuild 的 --project 参数顺序
+        if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
+            echo -e "${GREEN}   ↳ ✅ 重装成功！容器已重置净化。${NC}"
         else
-            echo -e "${RED}   ↳ ❌ 重装失败，请手动介入检查。${NC}\n"
+            echo -e "${RED}   ↳ ❌ 重装失败，请手动介入检查。${NC}"
         fi
+    else
+        echo -e "${GREEN}[✔ 正常]${NC}"
     fi
-done < <(echo "$RUNNING_INSTANCES")
+done
 
-printf "\r%-60s\n" ""
+echo "------------------------------------------------"
 echo -e "${CYAN}=======================================${NC}"
-echo -e "${CYAN} 🏁 盘查结束${NC}"
+echo -e "${CYAN} 🏁 全盘盘查结束${NC}"
 echo -e "${CYAN}=======================================${NC}\n"
 
 if [ "$INFECTED_COUNT" -eq 0 ]; then
-    echo -e "${GREEN}✨ 完美安全：所有项目运行中容器指标健康，网络及进程无异常。${NC}"
+    echo -e "${GREEN}✨ 完美安全：所有项目运行中容器指标健康，未发现任何违规。${NC}"
 else
     echo -e "${YELLOW}🚨 处理报告：本次任务共计清洗并强制重装了 ${RED}${INFECTED_COUNT}${NC} 个高风险容器。${NC}"
 fi
