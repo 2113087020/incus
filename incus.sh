@@ -1,5 +1,5 @@
 #!/bin/bash
-# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.1 滚动日志明文版)
+# incus 容器网络防护与违规进程智能检测一体化脚本 (v4.2 终极纠偏修复版)
 
 SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|ew|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
 MAX_TCP_CONN=500
@@ -55,7 +55,6 @@ echo -e "\n${CYAN}=======================================${NC}"
 echo -e "${CYAN} 🚀 阶段二: 容器内部违规进程与 DDoS 行为清查${NC}"
 echo -e "${CYAN}=======================================${NC}\n"
 
-# 智能匹配重装镜像
 local_alpine=$(incus image list local: -f csv -c fd < /dev/null 2>/dev/null | grep -i "alpine" | head -n1 | awk -F, '{print $1}')
 if [ -n "$local_alpine" ]; then
     TARGET_IMAGE="$local_alpine"
@@ -68,8 +67,8 @@ else
     fi
 fi
 
-# 修正部分低版本快捷键解析，改用标准全称获取实例列表
-RUNNING_INSTANCES=$(incus list --all-projects -f csv -c n,p,s < /dev/null 2>/dev/null | grep -i ',RUNNING$' | awk -F, '{print $1","$2}')
+# 【核心修正】将列参数由 p(PID) 改为 e(Project Name)，彻底拉回正确轨道
+RUNNING_INSTANCES=$(incus list --all-projects -f csv -c n,e,s < /dev/null 2>/dev/null | grep -i ',RUNNING$' | awk -F, '{print $1","$2}')
 
 if [ -z "$RUNNING_INSTANCES" ]; then
     echo -e "${GREEN}安全：当前宿主机上没有正在运行的容器，无需清查。${NC}"
@@ -83,17 +82,16 @@ echo "------------------------------------------------"
 COUNT=0
 INFECTED_COUNT=0
 
-for instance in $RUNNING_INSTANCES; do
+# 使用安全的文件流读取，配合强力防吞参数，实现精准遍历
+while IFS= read -r instance; do
     [ -z "$instance" ] && continue
     COUNT=$((COUNT + 1))
     
     container=$(echo "$instance" | awk -F, '{print $1}')
     project=$(echo "$instance" | awk -F, '{print $2}')
     
-    # 改为明文换行打印，拒绝回首覆盖，确保所见即所得
     printf "[%d/%d] 正在盘查容器: %-26s [项目: %-8s] -> " "$COUNT" "$TOTAL" "$container" "$project"
 
-    # 【核心修复】将 --project 参数严格修正移动到 exec 子命令的最前面！
     HIT_REASON=$(incus exec --project "$project" "$container" -- sh -c '
         KEYWORDS="$1"
         MAX_TCP="$2"
@@ -132,8 +130,7 @@ for instance in $RUNNING_INSTANCES; do
     if [ -n "$HIT_REASON" ]; then
         INFECTED_COUNT=$((INFECTED_COUNT + 1))
         echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
-        echo -e "${YELLOW}   ↳ 🔄 正在强制直接智能重装...${NC}"
-        # 【核心修复】同样修正 rebuild 的 --project 参数顺序
+        echo -e "${YELLOW}   ↳ 🔄 发现违规，正在强制直接智能重装...${NC}"
         if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
             echo -e "${GREEN}   ↳ ✅ 重装成功！容器已重置净化。${NC}"
         else
@@ -142,7 +139,7 @@ for instance in $RUNNING_INSTANCES; do
     else
         echo -e "${GREEN}[✔ 正常]${NC}"
     fi
-done
+done < <(echo "$RUNNING_INSTANCES")
 
 echo "------------------------------------------------"
 echo -e "${CYAN}=======================================${NC}"
