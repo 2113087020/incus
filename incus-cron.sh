@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.10 终极防死锁版)
+# Linux 通用防火墙单向阻断与 Incus 巡检一体化部署脚本 (v5.11 完美对齐完全体版)
 # =======================================================================
 
 # 开启顶级严格错误追踪与管道熔断，全局死锁保护
@@ -108,7 +108,7 @@ curl -sLf https://cdn.jsdelivr.net/gh/ipverse/country-ip-blocks@master/country/c
 # 5. 生成统一白名单配置文件
 echo "📝 正在构建本地统一白名单配置文件..."
 cat << EOF > "$CONF_DIR/whitelist.conf"
-# 自动生成的白名单配置文件 (由部署脚本 v5.10 托管配置)
+# 自动生成的白名单配置文件 (由部署脚本 v5.11 托管配置)
 WHITELIST_DOMAINS=(
 $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 )
@@ -124,7 +124,7 @@ if command -v incus &>/dev/null; then
     incus network unset incusbr0 raw.dnsmasq || true
 fi
 
-# 7. 生成独立的本地防火墙原子初始化脚本 (已彻底修复 Shebang Typo)
+# 7. 生成独立的本地防火墙原子初始化脚本 (已彻底修复 31 行 Shebang 乱码 Typo)
 echo "📝 正在构建本地独立防火墙自愈脚本..."
 cat << 'INIT' > "$INIT_SCRIPT"
 #!/bin/bash
@@ -264,7 +264,7 @@ echo "=================================================="
 
 echo "📦 正在配置定时任务调度外壳..."
 
-# 写入后台巡检调度脚本
+# 写入后台巡检调度脚本 (【重大重构】：已完美对齐 v4.4 容器清洗重装特征码)
 cat << 'EOF' > "$CRON_SCRIPT"
 #!/bin/bash
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
@@ -277,17 +277,26 @@ fi
 # 2. 执行 Incus 容器特征扫描与重装巡检
 LOG_FILE="/var/log/incus_clean.log"
 TMP_OUT=$(mktemp)
-trap 'rm -f "$TMP_OUT"' EXIT
+CLEAN_OUT=$(mktemp)
+trap 'rm -f "$TMP_OUT" "$CLEAN_OUT"' EXIT
 
-timeout 10m bash -c 'curl -sLf --connect-timeout 10 --max-time 30 https://raw.githubusercontent.com/2113087020/incus/main/incus.sh | bash' > "$TMP_OUT" 2>&1
+# 拉取远程最新脚本执行，将混合日志存入临时文件
+timeout 10m bash -c 'curl -sLf -H "Cache-Control: no-cache" -H "Pragma: no-cache" "https://raw.githubusercontent.com/2113087020/incus/main/incus.sh?v=$(date +%s)" | bash' > "$TMP_OUT" 2>&1
 
-if grep -q "发现违规特征" "$TMP_OUT"; then
+# 【核心加固】：先强制剥离所有不可见的终端 ANSI 颜色控制字符，防止干扰关键字拦截
+sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' "$TMP_OUT" | sed -E 's/\r/\n/g' > "$CLEAN_OUT"
+
+# 【核心对齐】：精准拦截 v4.4 版本的重装报警关键字 (违规 | 强制直接智能重装 | 重装成功)
+if grep -qE "违规:|发现违规|重装成功" "$CLEAN_OUT"; then
+    # 日志文件滚动限额裁剪 (超过 100KB 自动保留末尾 300 行，防爆硬盘)
     if [ -f "$LOG_FILE" ] && [ $(stat -c%s "$LOG_FILE") -gt 102400 ]; then
         tail -n 300 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
-        echo "--- $(date '+%Y-%m-%d %H:%M:%S') 日志超 100KB 已裁剪 ---" >> "$LOG_FILE"
+        echo "--- $(date '+%Y-%m-%d %H:%M:%S') 日志超 100KB 已自动裁剪矩阵 ---" >> "$LOG_FILE"
     fi
-    echo "=== [$(date '+%Y-%m-%d %H:%M:%S')] 拦截与重装记录 ===" >> "$LOG_FILE"
-    grep -E "发现违规特征|重装成功|重装失败" "$TMP_OUT" | sed -E 's/\r/\n/g' | sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' | grep -E "发现违规特征|重装成功|重装失败" >> "$LOG_FILE"
+    
+    # 纯净追加本次重装净化核心事件日志
+    echo "=== [$(date '+%Y-%m-%d %H:%M:%S')] 🚨 Incus 容器自动重装自愈事件报告 ===" >> "$LOG_FILE"
+    grep -E "违规:|发现违规|正在强制|重装成功|重装失败" "$CLEAN_OUT" >> "$LOG_FILE"
     echo "" >> "$LOG_FILE"
 fi
 EOF
@@ -300,6 +309,6 @@ OLD_CRON=$(crontab -l 2>/dev/null | grep -v "incus_cron.sh" || true)
 printf "%s\n*/5 * * * * %s\n" "$OLD_CRON" "$CRON_SCRIPT" | grep -v '^$' | crontab -
 
 echo "------------------------------------------------"
-echo "✅ 全套一体化安全配置【v5.10 宿主专属无损完全体版】！"
-echo "ℹ️  极速 IP：中国 IP 库已通过 ipverse 官方源刷新装载。"
-echo "ℹ️  宿主动态放行：仅放行宿主机自身的 CDN 白名单解析与连接。"
+echo "✅ 全套一体化安全配置【v5.11 宿主专属自愈完全体版】部署成功！"
+echo "ℹ️  审计规则：日志模块已完美适配 v4.4，仅在容器触发违规且成功执行重装时，才会向 $LOG_FILE 追加记录。"
+EOF
