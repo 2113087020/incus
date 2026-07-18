@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Incus 宿主网络安全自愈与容器动态清洗一体化部署脚本 (v5.8 容器专用隔离版)
+# Incus 宿主网络安全自愈与容器动态清洗一体化部署脚本 (v5.8 修正精准版)
 # =======================================================================
 
 set -e
@@ -51,7 +51,11 @@ BLACKLIST_DOMAINS=(
 )
 
 # ==================== 🔍 自定义扫描与容器端口拦截 ====================
-SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
+# 修改点：将长词放在常规匹配变量中
+SCAN_KEYWORDS_LONG="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|masscan|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|chisel|rclone|ngrok|pagekite|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
+# 修改点：将短词单独拿出来，在内部匹配时使用精确边界
+SCAN_KEYWORDS_SHORT="ew|lcx|nps|npc|bore|ward|suo5|nmap|zmap"
+
 MAX_TCP_CONN=500
 MAX_UDP_CONN=500
 MAX_RAW_CONN=50
@@ -368,20 +372,21 @@ for project in $PROJECT_LIST; do
         printf "[%d] 正在盘查: %-26s [项目: %-8s] -> " "$COUNT" "$container" "$project"
 
         HIT_REASON=$(incus exec --project "$project" "$container" -- sh -c '
-            KEYWORDS="$1"
-            MAX_TCP="$2"
-            MAX_UDP="$3"
-            MAX_RAW="$4"
-            MAX_SYN="$5"
+            KEYWORDS_LONG="$1"
+            KEYWORDS_SHORT="$2"
+            MAX_TCP="$3"
+            MAX_UDP="$4"
+            MAX_RAW="$5"
+            MAX_SYN="$6"
             SELF=$$
             
             [ -f /proc/net/tcp ] || exit 0
-            TCP_FILE=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -v "sl")
             
-            TCP_COUNT=$(echo "$TCP_FILE" | grep -c "^")
-            UDP_COUNT=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | grep -v "sl" | grep -c "^")
-            RAW_COUNT=$(cat /proc/net/raw /proc/net/raw6 2>/dev/null | grep -v "sl" | grep -c "^")
-            SYN_COUNT=$(echo "$TCP_FILE" | awk '\''{print $4}'\'' | grep -c "02")
+            # 修改点：使用 cat 聚合文件后再 grep，防止多文件导致数字结果变成文字从而报错
+            TCP_COUNT=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -cv "sl" || echo 0)
+            UDP_COUNT=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | grep -cv "sl" || echo 0)
+            RAW_COUNT=$(cat /proc/net/raw /proc/net/raw6 2>/dev/null | grep -cv "sl" || echo 0)
+            SYN_COUNT=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '\''{print $4}'\'' | grep -c "02" || echo 0)
 
             if [ "$SYN_COUNT" -gt "$MAX_SYN" ]; then echo "异常开包扫描 ($SYN_COUNT)"; exit 0; fi
             if [ "$TCP_COUNT" -gt "$MAX_TCP" ]; then echo "TCP高并发 ($TCP_COUNT)"; exit 0; fi
@@ -392,19 +397,29 @@ for project in $PROJECT_LIST; do
                 [ -f "$f" ] || continue
                 p="${f%/cmdline}"; p="${p#/proc/}"
                 [ "$p" = "$SELF" ] && continue
-                MATCHED=$(tr "\0" "\n" < "$f" 2>/dev/null | grep -oiE "$KEYWORDS" | head -n1)
-                if [ -n "$MATCHED" ]; then echo "违规进程: $MATCHED"; exit 0; fi
+                
+                CMD_TEXT=$(tr "\0" "\n" < "$f" 2>/dev/null || true)
+                
+                # 匹配长特征 (子串即可)
+                MATCHED_LONG=$(echo "$CMD_TEXT" | grep -oiE "$KEYWORDS_LONG" | head -n1 || true)
+                if [ -n "$MATCHED_LONG" ]; then echo "违规进程: $MATCHED_LONG"; exit 0; fi
+                
+                # 匹配短特征 (精确要求：前后必须是边界符如空格或换行，防止如"new"包含"ew"的误杀)
+                # 利用了grep -w的特性：只匹配完整的单词
+                MATCHED_SHORT=$(echo "$CMD_TEXT" | tr "/" " " | grep -owiE "$KEYWORDS_SHORT" | head -n1 || true)
+                if [ -n "$MATCHED_SHORT" ]; then echo "违规进程: $MATCHED_SHORT"; exit 0; fi
             done
             
             for p in /opt/nezha/agent/nezha-agent /usr/local/bin/nezha-agent /usr/local/bin/nezha_agent /root/nezha-agent /etc/init.d/nezha-agent /etc/systemd/system/nezha-agent.service; do
                 if [ -e "$p" ]; then echo "残留文件: $p"; exit 0; fi
             done
-        ' sh "$SCAN_KEYWORDS" "$MAX_TCP_CONN" "$MAX_UDP_CONN" "$MAX_RAW_CONN" "$MAX_SYN_SENT" < /dev/null 2>/dev/null || true)
+        ' sh "$SCAN_KEYWORDS_LONG" "$SCAN_KEYWORDS_SHORT" "$MAX_TCP_CONN" "$MAX_UDP_CONN" "$MAX_RAW_CONN" "$MAX_SYN_SENT" < /dev/null 2>/dev/null || true)
 
         if [ -n "$HIT_REASON" ]; then
             INFECTED_COUNT=$((INFECTED_COUNT + 1))
             echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
             echo -e "${YELLOW}   ↳ 🔄 正在执行强制抹除性重装自愈...${NC}"
+            # 保持你的命令完全不动
             if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
                 echo -e "${GREEN}   ↳ ✅ 重装成功！${NC}"
             else
