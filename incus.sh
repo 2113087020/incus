@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Incus 宿主网络安全自愈与容器动态清洗一体化部署脚本 (v5.6 绝对黑洞版)
+# Incus 宿主网络安全自愈与容器动态清洗一体化部署脚本 (v5.8 容器专用隔离版)
 # =======================================================================
 
 set -e
@@ -23,8 +23,7 @@ WHITELIST_IPS=(
     "8.8.8.8"              # 公共 DNS
 )
 
-# ☠️ 强制黑洞域名列表（彻底封杀国内大厂的海外 CDN 马甲）
-# dnsmasq 会将这些域名及其所有子域名强制解析为 0.0.0.0
+# ☠️ 强制黑洞域名列表
 BLACKLIST_DOMAINS=(
     "baidu.com"
     "taobao.com"
@@ -51,12 +50,15 @@ BLACKLIST_DOMAINS=(
     "aliyun.com"
 )
 
-# ==================== 🔍 自定义扫描黑名单 ====================
-SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
-MAX_TCP_CONN=600
+# ==================== 🔍 自定义扫描与容器端口拦截 ====================
+SCAN_KEYWORDS="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|nmap|masscan|zmap|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|npc|nps|chisel|rclone|ngrok|pagekite|bore|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|lcx|ew|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|suo5|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|ward|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
+MAX_TCP_CONN=500
 MAX_UDP_CONN=500
 MAX_RAW_CONN=50
 MAX_SYN_SENT=30
+
+# ⛔ 仅针对容器的出站高危端口封杀
+BLOCK_OUT_PORTS="22,23,445,3389,6379,2375,2376"
 # =======================================================================
 
 CRON_SCRIPT="/usr/local/bin/incus_cron.sh"
@@ -98,7 +100,6 @@ for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     HOST_DNS_CONF="${HOST_DNS_CONF}ipset=/${clean_domain}/whitelist_ips_dynamic\n"
 done
-# 注入宿主机黑洞配置
 for domain in "${BLACKLIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     HOST_DNS_CONF="${HOST_DNS_CONF}address=/${clean_domain}/0.0.0.0\n"
@@ -126,6 +127,7 @@ $(printf "    \"%s\"\n" "${WHITELIST_DOMAINS[@]}")
 WHITELIST_IPS=(
 $(printf "    \"%s\"\n" "${WHITELIST_IPS[@]}")
 )
+BLOCK_OUT_PORTS="$BLOCK_OUT_PORTS"
 EOF
 
 incus network set incusbr0 raw.dnsmasq= >/dev/null 2>&1 || true
@@ -134,7 +136,6 @@ for domain in "${WHITELIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     RAW_DNSMASQ_CONF="${RAW_DNSMASQ_CONF}ipset=/${clean_domain}/whitelist_ips_dynamic\n"
 done
-# 注入 Incus 容器黑洞配置
 for domain in "${BLACKLIST_DOMAINS[@]}"; do
     clean_domain=$(echo "$domain" | sed 's/^\*\.//')
     RAW_DNSMASQ_CONF="${RAW_DNSMASQ_CONF}address=/${clean_domain}/0.0.0.0\n"
@@ -195,6 +196,11 @@ iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner nobody -j ACC
 iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
 iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
 
+# 仅清理容器 FORWARD 链上的端口限制
+if [ -n "$BLOCK_OUT_PORTS" ]; then
+    while iptables -D FORWARD -i incusbr0 -p tcp -m multiport --dports "$BLOCK_OUT_PORTS" -j REJECT 2>/dev/null; do :; done
+fi
+
 while iptables -D OUTPUT -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -p tcp -m set --match-set cnip dst --syn -j REJECT 2>/dev/null; do :; done
@@ -234,6 +240,11 @@ done
 iptables -I FORWARD 1 -o incusbr0 -j ACCEPT
 iptables -I FORWARD 1 -i incusbr0 -j ACCEPT
 iptables -I FORWARD 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# 仅封杀容器端口
+if [ -n "$BLOCK_OUT_PORTS" ]; then
+    iptables -I FORWARD 1 -i incusbr0 -p tcp -m multiport --dports "$BLOCK_OUT_PORTS" -j REJECT
+fi
 
 iptables -I OUTPUT 1 -p tcp -m set --match-set cnip dst --syn -j REJECT
 iptables -I OUTPUT 1 -p udp -m set --match-set cnip dst -j REJECT
