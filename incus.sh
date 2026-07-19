@@ -55,8 +55,8 @@ SCAN_KEYWORDS_LONG="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccmine
 SCAN_KEYWORDS_SHORT="ew|lcx|nps|npc|bore|ward|suo5|nmap|zmap"
 
 # 【优化点】针对 1-3 人使用的代理节点参数设定
-MAX_TCP_CONN=1500
-MAX_UDP_CONN=1500
+MAX_TCP_CONN=800
+MAX_UDP_CONN=600
 MAX_RAW_CONN=50
 MAX_SYN_SENT=80
 
