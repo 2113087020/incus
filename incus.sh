@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================================
-# Incus 宿主网络安全自愈与容器动态清洗一体化部署脚本 (v5.8 修正精准版)
+# Incus 宿主网络安全自愈与容器动态清洗一体化部署脚本 (1-3人代理专版)
 # =======================================================================
 
 set -e
@@ -51,15 +51,14 @@ BLACKLIST_DOMAINS=(
 )
 
 # ==================== 🔍 自定义扫描与容器端口拦截 ====================
-# 修改点：将长词放在常规匹配变量中
 SCAN_KEYWORDS_LONG="nezha[-_]?agent|komari|xmrig|xmr-stak|minerd|cpuminer|ccminer|cgminer|bfgminer|ethminer|claymore|phoenixminer|nanominer|t-rex|lolminer|nbminer|gminer|teamredminer|nicehash|kryptex|kdevtmpfsi|kinsing|sysrv|sysrv-md|sustse|sustsed|wnw7492|monero|cryptonight|stratum|minergate|poolminer|minerstat|srbminer|astrominer|xmrig-proxy|crypto-miner|hashcat|crypto-pool|gridcrude|pamd32|panchan|p2pinfect|skidmap|watchdogx|watchdogs|kerberods|masscan|rustscan|fscan|gobuster|dirbuster|nikto|wpscan|hydra|medusa|ncrack|crowbar|patator|brutex|ssh_scan|sshcheck|pyrdp|xsstrike|hping|hping3|loic|hoic|slowloris|synflood|udpflood|mirai|gafgyt|bashlite|tsunami|billgates|elknot|dofloo|sedna|stacheldraht|trinoo|kptd|atdd|skynet|gates\.lod|conficker|xorddos|muhstik|frpc|frps|chisel|rclone|ngrok|pagekite|localtonet|vtun|anyconnect|openconnect|iodine|dnscat2|dnscat|3proxy|beacon|geacon|sliver|merlin|metasploit|msfconsole|msfvenom|viper|meterpreter|reasing|neo-regeorg|cmd53|godzilla|behinder|antsword|stowaway|venom|serverstatus|stat_server|stat_client|sergate|beszel-hub|beszel-agent|beszel|nodeget|uptime-kuma|nodequery|prometheus|node_exporter|zabbix_server|zabbix_agentd|grafana-server|grafana|influxd|netdata|glances|cockpit-ws|skywalking|sw-oap-server|vmagent|victoriametrics|fluent-bit|fluentd|logstash|vector|datadog-agent|agent2|filebeat|packetbeat|telegraf|sematext|pinpoint-agent|skywalking-agent|dozzle|scrutiny|sysupdate"
-# 修改点：将短词单独拿出来，在内部匹配时使用精确边界
 SCAN_KEYWORDS_SHORT="ew|lcx|nps|npc|bore|ward|suo5|nmap|zmap"
 
-MAX_TCP_CONN=500
-MAX_UDP_CONN=500
+# 【优化点】针对 1-3 人使用的代理节点参数设定
+MAX_TCP_CONN=1500
+MAX_UDP_CONN=1500
 MAX_RAW_CONN=50
-MAX_SYN_SENT=30
+MAX_SYN_SENT=80
 
 # ⛔ 仅针对容器的出站高危端口封杀
 BLOCK_OUT_PORTS="22,23,445,3389,6379,2375,2376"
@@ -200,18 +199,22 @@ iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner nobody -j ACC
 iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
 iptables -t nat -I OUTPUT 1 -p udp --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT
 
-# 仅清理容器 FORWARD 链上的端口限制
 if [ -n "$BLOCK_OUT_PORTS" ]; then
     while iptables -D FORWARD -i incusbr0 -p tcp -m multiport --dports "$BLOCK_OUT_PORTS" -j REJECT 2>/dev/null; do :; done
 fi
 
+# 【清理旧版残留】清除不带 NEW 状态限制的旧版 UDP 拦截规则
+while iptables -D OUTPUT -p udp -m set --match-set cnip dst -j REJECT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -p udp -m set --match-set cnip dst -j REJECT 2>/dev/null; do :; done
+
+# 常规规则清理
 while iptables -D OUTPUT -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -i incusbr0 -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -p tcp -m set --match-set cnip dst --syn -j REJECT 2>/dev/null; do :; done
-while iptables -D OUTPUT -p udp -m set --match-set cnip dst -j REJECT 2>/dev/null; do :; done
+while iptables -D OUTPUT -p udp -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D OUTPUT -p icmp -m set --match-set cnip dst -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -i incusbr0 -p tcp -m set --match-set cnip dst --syn -j REJECT 2>/dev/null; do :; done
-while iptables -D FORWARD -i incusbr0 -p udp -m set --match-set cnip dst -j REJECT 2>/dev/null; do :; done
+while iptables -D FORWARD -i incusbr0 -p udp -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT 2>/dev/null; do :; done
 while iptables -D FORWARD -i incusbr0 -p icmp -m set --match-set cnip dst -j REJECT 2>/dev/null; do :; done
 
 while iptables -D INPUT -i incusbr0 -p udp --dport 53 -m string --hex-string "|02636e00|" --algo bm -j REJECT 2>/dev/null; do :; done
@@ -250,10 +253,11 @@ if [ -n "$BLOCK_OUT_PORTS" ]; then
     iptables -I FORWARD 1 -i incusbr0 -p tcp -m multiport --dports "$BLOCK_OUT_PORTS" -j REJECT
 fi
 
+# 核心修改点：加入 -m conntrack --ctstate NEW，允许大陆主动连进来，阻止服务器主动攻击大陆
 iptables -I OUTPUT 1 -p tcp -m set --match-set cnip dst --syn -j REJECT
-iptables -I OUTPUT 1 -p udp -m set --match-set cnip dst -j REJECT
+iptables -I OUTPUT 1 -p udp -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
 iptables -I FORWARD 1 -i incusbr0 -p tcp -m set --match-set cnip dst --syn -j REJECT
-iptables -I FORWARD 1 -i incusbr0 -p udp -m set --match-set cnip dst -j REJECT
+iptables -I FORWARD 1 -i incusbr0 -p udp -m set --match-set cnip dst -m conntrack --ctstate NEW -j REJECT
 
 iptables -I OUTPUT 1 -m set --match-set whitelist_ips_dynamic dst -j ACCEPT
 iptables -I OUTPUT 1 -m set --match-set whitelist_ips_static dst -j ACCEPT
@@ -382,7 +386,6 @@ for project in $PROJECT_LIST; do
             
             [ -f /proc/net/tcp ] || exit 0
             
-            # 修改点：使用 cat 聚合文件后再 grep，防止多文件导致数字结果变成文字从而报错
             TCP_COUNT=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -cv "sl" || echo 0)
             UDP_COUNT=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | grep -cv "sl" || echo 0)
             RAW_COUNT=$(cat /proc/net/raw /proc/net/raw6 2>/dev/null | grep -cv "sl" || echo 0)
@@ -400,12 +403,9 @@ for project in $PROJECT_LIST; do
                 
                 CMD_TEXT=$(tr "\0" "\n" < "$f" 2>/dev/null || true)
                 
-                # 匹配长特征 (子串即可)
                 MATCHED_LONG=$(echo "$CMD_TEXT" | grep -oiE "$KEYWORDS_LONG" | head -n1 || true)
                 if [ -n "$MATCHED_LONG" ]; then echo "违规进程: $MATCHED_LONG"; exit 0; fi
                 
-                # 匹配短特征 (精确要求：前后必须是边界符如空格或换行，防止如"new"包含"ew"的误杀)
-                # 利用了grep -w的特性：只匹配完整的单词
                 MATCHED_SHORT=$(echo "$CMD_TEXT" | tr "/" " " | grep -owiE "$KEYWORDS_SHORT" | head -n1 || true)
                 if [ -n "$MATCHED_SHORT" ]; then echo "违规进程: $MATCHED_SHORT"; exit 0; fi
             done
@@ -419,7 +419,6 @@ for project in $PROJECT_LIST; do
             INFECTED_COUNT=$((INFECTED_COUNT + 1))
             echo -e "${RED}【🚨 违规: $HIT_REASON】${NC}"
             echo -e "${YELLOW}   ↳ 🔄 正在执行强制抹除性重装自愈...${NC}"
-            # 保持你的命令完全不动
             if incus rebuild --project "$project" "$TARGET_IMAGE" "$container" --force < /dev/null >/dev/null 2>&1; then
                 echo -e "${GREEN}   ↳ ✅ 重装成功！${NC}"
             else
