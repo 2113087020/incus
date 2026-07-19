@@ -29,6 +29,14 @@ echo "=================================================="
 echo "🛡️  第一阶段：配置单向阻断防火墙与宿主 DNS 劫持"
 echo "=================================================="
 
+# 【修复 1】：设置 DEBIAN_FRONTEND 为非交互模式，防止 apt 卡住
+export DEBIAN_FRONTEND=noninteractive
+
+# 【修复 2】：将安装步骤提前，并加入静默处理参数
+apt-get update -y
+apt-get install -y -q -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" ipset curl iptables dnsmasq dnsutils cron
+systemctl enable --now cron
+
 # 释放 DNS 配置文件
 rm -f /etc/resolv.conf
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
@@ -58,6 +66,7 @@ find /etc/apt/ -name "*.list" -type f | while read -r list_file; do
     fi
 done
 
+# 【修复 3】：依赖安装完成后，再进行 dnsmasq 配置
 mkdir -p /etc/dnsmasq.d
 echo "conf-dir=/etc/dnsmasq.d/,*.conf" > /etc/dnsmasq.conf
 
@@ -69,9 +78,6 @@ done
 HOST_DNS_CONF="${HOST_DNS_CONF}server=8.8.8.8\nserver=1.1.1.1\n"
 printf "$HOST_DNS_CONF" > /etc/dnsmasq.d/dynamic_whitelist.conf
 
-apt-get update -y
-apt-get install ipset curl iptables dnsmasq dnsutils cron -y
-systemctl enable --now cron
 systemctl restart dnsmasq || systemctl start dnsmasq
 
 mkdir -p "$CONF_DIR"
